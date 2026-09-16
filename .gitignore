@@ -1,0 +1,56 @@
+# Python & Virtual Environments
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.venv
+venv/
+ENV/
+
+# Testing & Coverage
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# Environment variables & Local secrets
+.env
+.env.local
+*.local
+
+# IDE & Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Vector DB & Cache directories
+.qdrant/
+qdrant_storage/
+fastembed_cache/
+workspace_logs/
+*.log
