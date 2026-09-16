@@ -79,6 +79,82 @@ class TestParsers(unittest.TestCase):
         self.assertIn("مدیریت مناقصات", tender_create.breadcrumbs)
         self.assertIn("ثبت مناقصه جدید", tender_create.breadcrumbs)
 
+    def test_spa_pageid_label_fa_and_switch(self):
+        nav_code = """
+        export const navigationItems = [
+          {
+            id: "dashboard",
+            LabelFa: "داشبورد",
+            LabelEn: "Dashboard",
+            icon: Gauge,
+          },
+          {
+            id: "knowledge",
+            LabelFa: "پایگاه دانش",
+            LabelEn: "Knowledge Base",
+            icon: KeyRound,
+          },
+          // {
+          //   id: "appearance",
+          //   LabelFa: "ظاهر",
+          //   LabelEn: "Appearance",
+          // },
+        ];
+        """
+        app_code = """
+        const page = useMemo(() => {
+          switch (effectivePage) {
+            case "dashboard":
+              return <DashboardPage language={language} />;
+            case "knowledge":
+              return <KnowledgeBasePage language={language} />;
+            case "user-chat":
+              return (
+                <UserChatPage
+                  userId={apiConfig.defaultUserId}
+                  language={language}
+                />
+              );
+            case "profile":
+              return <ProfilePage language={language} />;
+            default:
+              return null;
+          }
+        }, [effectivePage]);
+        """
+        nav_routes = self.route_extractor._parse_route_file(nav_code, file_path="src/layouts/navigation.ts")
+        app_routes = self.route_extractor._parse_route_file(app_code, file_path="src/App.tsx")
+
+        by_path = {r.path: r for r in nav_routes}
+        for r in app_routes:
+            if r.path in by_path:
+                if r.component_name and not by_path[r.path].component_name:
+                    by_path[r.path].component_name = r.component_name
+            else:
+                by_path[r.path] = r
+
+        routes = list(by_path.values())
+        self.route_extractor._enrich_breadcrumbs(routes)
+
+        paths = [r.path for r in routes]
+        self.assertIn("/dashboard", paths)
+        self.assertIn("/knowledge", paths)
+        self.assertIn("/user-chat", paths)
+        self.assertIn("/profile", paths)
+        self.assertNotIn("/appearance", paths)
+
+        dashboard = by_path["/dashboard"]
+        self.assertEqual(dashboard.title, "داشبورد")
+        self.assertEqual(dashboard.component_name, "DashboardPage")
+        self.assertIn("داشبورد", dashboard.breadcrumbs)
+
+        knowledge = by_path["/knowledge"]
+        self.assertEqual(knowledge.title, "پایگاه دانش")
+        self.assertEqual(knowledge.component_name, "KnowledgeBasePage")
+
+        user_chat = by_path["/user-chat"]
+        self.assertEqual(user_chat.component_name, "UserChatPage")
+
 
 if __name__ == "__main__":
     unittest.main()
