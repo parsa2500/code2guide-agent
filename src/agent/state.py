@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 from src.parsers.ast_visitor import DiscoveredForm, ComponentInspection
 from src.parsers.route_extractor import RouteNode
+from src.parsers.openapi_parser import EndpointRequirement
 
 
 class AgentState(BaseModel):
@@ -19,6 +20,11 @@ class AgentState(BaseModel):
     identified_routes: List[RouteNode] = Field(default_factory=list, description="Matching routes")
     discovered_forms: List[DiscoveredForm] = Field(default_factory=list, description="Parsed forms and inputs")
     inspected_components: List[ComponentInspection] = Field(default_factory=list, description="Inspected JSX/TSX components")
+
+    # RBAC / API / validation enrichment
+    required_roles: List[str] = Field(default_factory=list, description="Permission/role strings required for the operation")
+    validation_notes: List[str] = Field(default_factory=list, description="Human-readable validation constraints")
+    api_endpoints: List[EndpointRequirement] = Field(default_factory=list, description="Related OpenAPI endpoints")
 
     # Tracking & Messaging
     messages: List[Dict[str, Any]] = Field(default_factory=list, description="Interaction history")

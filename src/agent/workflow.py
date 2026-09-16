@@ -75,7 +75,21 @@ class Code2GuideWorkflow:
 
         state.identified_routes = matching_routes
         state.extracted_breadcrumbs = best_crumbs
-        state.steps_taken.append(f"Discovered {len(matching_routes)} candidate routes")
+
+        # RBAC from frontend Permissions bindings + related OpenAPI endpoints
+        route_paths = [r.path for r in matching_routes]
+        state.required_roles = self.toolbox.roles_for_routes(route_paths)
+        state.api_endpoints = self.toolbox.related_api_endpoints(state.query)
+        # Also pull roles documented on matched API ops
+        for ep in state.api_endpoints:
+            for role in ep.roles_required:
+                if role not in state.required_roles:
+                    state.required_roles.append(role)
+
+        state.steps_taken.append(
+            f"Discovered {len(matching_routes)} candidate routes"
+            + (f", roles={state.required_roles}" if state.required_roles else "")
+        )
         return dump_model(state)
 
     def node_search_labels(self, state: AgentState) -> Dict[str, Any]:
@@ -113,15 +127,22 @@ class Code2GuideWorkflow:
                     try:
                         with open(full_rf, "r", encoding="utf-8") as f:
                             r_code = f.read()
-                        m = re.search(r'import\s+.*?' + re.escape(r.component_name) + r'.*?from\s+[\'"]([^\'"]+)[\'"]', r_code)
+                        m = re.search(
+                            r'import\s+.*?' + re.escape(r.component_name) + r'.*?from\s+[\'"]([^\'"]+)[\'"]',
+                            r_code,
+                        )
                         if m:
                             import_path = m.group(1)
-                            base_dir = full_rf.parent
-                            for ext in [".tsx", ".jsx", "/index.tsx", "/index.jsx"]:
-                                cand = (base_dir / (import_path + ext)).resolve()
-                                if cand.exists():
-                                    target_files.add(str(cand.relative_to(ws_root)))
-                                    break
+                            resolved_rel = self.toolbox.resolve_import_path(import_path, r.file_path)
+                            if resolved_rel:
+                                target_files.add(resolved_rel)
+                            else:
+                                base_dir = full_rf.parent
+                                for ext in [".tsx", ".jsx", "/index.tsx", "/index.jsx"]:
+                                    cand = (base_dir / (import_path + ext)).resolve()
+                                    if cand.exists():
+                                        target_files.add(str(cand.relative_to(ws_root)).replace("\\", "/"))
+                                        break
                     except Exception:
                         pass
                 target_files.add(r.file_path)
@@ -143,6 +164,7 @@ class Code2GuideWorkflow:
 
         discovered_forms: List[DiscoveredForm] = []
         inspected_comps: List[ComponentInspection] = []
+        validation_notes: List[str] = []
 
         sorted_files = sorted(
             list(target_files),
@@ -155,6 +177,9 @@ class Code2GuideWorkflow:
             inspection_data = self.toolbox.inspect_component(fpath)
             if "error" not in inspection_data:
                 forms = [DiscoveredForm(**f) for f in inspection_data.get("forms", [])]
+                for note in inspection_data.get("validation_notes") or []:
+                    if note not in validation_notes:
+                        validation_notes.append(note)
                 if forms and (forms[0].fields or forms[0].buttons):
                     discovered_forms.extend(forms)
                     inspected_comps.append(
@@ -169,7 +194,12 @@ class Code2GuideWorkflow:
 
         state.discovered_forms = discovered_forms
         state.inspected_components = inspected_comps
-        state.steps_taken.append(f"Inspected AST for {len(inspected_comps)} components, extracted {len(discovered_forms)} forms")
+        state.validation_notes = validation_notes
+        state.steps_taken.append(
+            f"Inspected AST for {len(inspected_comps)} components, "
+            f"extracted {len(discovered_forms)} forms, "
+            f"{len(validation_notes)} validation notes"
+        )
         return dump_model(state)
 
     def node_synthesize_guide(self, state: AgentState) -> Dict[str, Any]:
@@ -220,7 +250,20 @@ class Code2GuideWorkflow:
         if not all_fields:
             fields_lines.append("- اطلاعات پایه مورد نیاز را مطابق فرم در دسترس وارد فرمایید.")
 
+        if state.validation_notes:
+            fields_lines.append("\n#### قیود اعتبارسنجی کشف‌شده از اسکیما/فرم:")
+            for note in state.validation_notes[:12]:
+                fields_lines.append(f"- {note}")
+
         fields_section = "\n".join(fields_lines)
+
+        rbac_notes = ""
+        if state.required_roles:
+            roles_str = "، ".join(state.required_roles)
+            rbac_notes = (
+                f"\n> **توجه به دسترسی‌ها (RBAC):** برای انجام این عملیات، حساب کاربری شما "
+                f"باید دارای نقش/مجوزهای: `{roles_str}` باشد.\n"
+            )
 
         action_button = None
         for f in state.discovered_forms:
@@ -269,6 +312,7 @@ class Code2GuideWorkflow:
                     action_section=action_section,
                     api_key=api_key,
                     model_name=model_name,
+                    rbac_notes=rbac_notes,
                 )
                 if llm_output and "مسیر دسترسی" in llm_output:
                     state.final_persian_guide = llm_output
@@ -285,6 +329,7 @@ class Code2GuideWorkflow:
         guide = UX_GUIDE_TEMPLATE.format(
             task_title=task_title,
             navigation_steps=nav_section,
+            rbac_notes=rbac_notes,
             page_url=page_url,
             fields_breakdown=fields_section,
             action_description=action_section
@@ -305,12 +350,20 @@ class Code2GuideWorkflow:
         action_section: str,
         api_key: str,
         model_name: Optional[str] = None,
+        rbac_notes: str = "",
     ) -> Optional[str]:
         """Invokes ChatOpenAI or OpenAI client (OpenRouter-compatible) for UX guidance."""
         model = model_name or settings.openrouter_model or settings.default_model
         base_url = settings.openrouter_base_url or os.getenv(
             "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
         )
+        api_bits = ""
+        if state.api_endpoints:
+            api_bits = "\n".join(
+                f"- {ep.method} {ep.path}"
+                + (f" roles={ep.roles_required}" if ep.roles_required else "")
+                for ep in state.api_endpoints[:6]
+            )
         user_prompt = f"""پرسش کاربر: {state.query}
 عنوان عملیات استخراج‌شده: {task_title}
 
@@ -319,17 +372,21 @@ class Code2GuideWorkflow:
 - مسیرهای منو (Breadcrumbs): {" > ".join(state.extracted_breadcrumbs) if state.extracted_breadcrumbs else "صفحه اصلی"}
 - آدرس URL صفحه هدف: {page_url}
 - فایل‌های بازرسی‌شده: {[c.file_path for c in state.inspected_components]}
-
+{rbac_notes}
 ۲. اطلاعات فیلدها و فرم‌های صفحه:
 {fields_section}
 
 ۳. دکمه اقدام نهایی:
 {action_section}
 
+۴. قراردادهای API مرتبط (در صورت وجود):
+{api_bits or "- موردی یافت نشد"}
+
 لطفاً به عنوان دستیار هوشمند، بر اساس داده‌های قطعی استخراج‌شده بالا، یک راهنمای بسیار سلیس، دقیق، گام‌به‌گام و کاربردی به زبان فارسی و با حفظ کامل ساختار سه بخشی زیر ارائه دهید:
 ### ۱. مسیر دسترسی (Navigation)
 ### ۲. اطلاعات لازم و فیلدهای فرم (Form Fields)
 ### ۳. دکمه اقدام نهایی (Action)
+اگر محدودیت RBAC وجود دارد، آن را در بخش مسیر دسترسی ذکر کنید.
 """
         # Try LangChain ChatOpenAI first (OpenRouter-compatible)
         try:
