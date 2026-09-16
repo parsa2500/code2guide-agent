@@ -250,10 +250,16 @@ class Code2GuideWorkflow:
 
         task_title = state.query.replace("چگونه", "").replace("کنم؟", "").replace("کنیم؟", "").strip() or "عملیات"
 
-        # 2. Attempt Real LLM Synthesis if API key is provided
-        api_key = settings.openai_api_key or os.getenv("OPENAI_API_KEY")
+        # 2. Attempt Real LLM Synthesis if API key is provided (OpenRouter preferred)
+        api_key = (
+            settings.openrouter_api_key
+            or os.getenv("OPENROUTER_API_KEY")
+            or settings.openai_api_key
+            or os.getenv("OPENAI_API_KEY")
+        )
         if api_key:
             try:
+                model_name = settings.openrouter_model or settings.default_model
                 llm_output = self._call_real_llm(
                     state=state,
                     task_title=task_title,
@@ -261,12 +267,15 @@ class Code2GuideWorkflow:
                     page_url=page_url,
                     fields_section=fields_section,
                     action_section=action_section,
-                    api_key=api_key
+                    api_key=api_key,
+                    model_name=model_name,
                 )
                 if llm_output and "مسیر دسترسی" in llm_output:
                     state.final_persian_guide = llm_output
                     state.status = "completed"
-                    state.steps_taken.append(f"Synthesized intelligent Persian guide using LLM ({settings.default_model})")
+                    state.steps_taken.append(
+                        f"Synthesized intelligent Persian guide using LLM ({model_name})"
+                    )
                     return dump_model(state)
             except Exception as e:
                 # Log error and continue to deterministic template fallback
@@ -294,9 +303,14 @@ class Code2GuideWorkflow:
         page_url: str,
         fields_section: str,
         action_section: str,
-        api_key: str
+        api_key: str,
+        model_name: Optional[str] = None,
     ) -> Optional[str]:
-        """Invokes ChatOpenAI or OpenAI client to produce Cursor-like intelligent UX guidance."""
+        """Invokes ChatOpenAI or OpenAI client (OpenRouter-compatible) for UX guidance."""
+        model = model_name or settings.openrouter_model or settings.default_model
+        base_url = settings.openrouter_base_url or os.getenv(
+            "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
+        )
         user_prompt = f"""پرسش کاربر: {state.query}
 عنوان عملیات استخراج‌شده: {task_title}
 
@@ -317,15 +331,16 @@ class Code2GuideWorkflow:
 ### ۲. اطلاعات لازم و فیلدهای فرم (Form Fields)
 ### ۳. دکمه اقدام نهایی (Action)
 """
-        # Try LangChain ChatOpenAI first
+        # Try LangChain ChatOpenAI first (OpenRouter-compatible)
         try:
             from langchain_openai import ChatOpenAI
             from langchain_core.messages import SystemMessage, HumanMessage
 
             llm = ChatOpenAI(
-                model=settings.default_model,
+                model=model,
                 api_key=api_key,
-                temperature=0.1
+                base_url=base_url,
+                temperature=0.1,
             )
             response = llm.invoke([
                 SystemMessage(content=SYSTEM_PROMPT),
@@ -335,12 +350,12 @@ class Code2GuideWorkflow:
         except ImportError:
             pass
 
-        # Try official OpenAI SDK client
+        # Try official OpenAI SDK client against OpenRouter
         try:
             import openai
-            client = openai.OpenAI(api_key=api_key)
+            client = openai.OpenAI(api_key=api_key, base_url=base_url)
             completion = client.chat.completions.create(
-                model=settings.default_model,
+                model=model,
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt}

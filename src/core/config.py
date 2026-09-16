@@ -29,14 +29,44 @@ class Settings(BaseSettings):
     )
 
     # Search & Indexing
-    qdrant_location: str = Field(default=":memory:", description="Qdrant host or in-memory location")
-    embedding_model: str = Field(default="BAAI/bge-m3", description="FastEmbed model name")
+    qdrant_url: Optional[str] = Field(
+        default="http://localhost:6333",
+        description="Qdrant HTTP URL (Docker). Prefer over qdrant_location."
+    )
+    qdrant_location: Optional[str] = Field(
+        default=None,
+        description="Legacy Qdrant path or :memory: when qdrant_url is unset"
+    )
+    embedding_provider: str = Field(
+        default="google",
+        description="Embedding backend: google | fastembed"
+    )
+    embedding_model: str = Field(
+        default="text-embedding-004",
+        description="Embedding model name"
+    )
+    embedding_dim: int = Field(default=768, description="Embedding vector dimension")
+    google_api_key: Optional[str] = Field(default=None, description="Google AI Studio API Key")
     ripgrep_path: str = Field(default="rg", description="Ripgrep binary path")
 
-    # LLM Settings (if connected to provider)
+    # OpenRouter LLM
+    openrouter_api_key: Optional[str] = Field(default=None, description="OpenRouter API Key")
+    openrouter_base_url: str = Field(
+        default="https://openrouter.ai/api/v1",
+        description="OpenRouter OpenAI-compatible base URL"
+    )
+    openrouter_model: str = Field(
+        default="openrouter/free",
+        description="Default OpenRouter chat model"
+    )
+
+    # Legacy LLM Settings
     openai_api_key: Optional[str] = Field(default=None, description="OpenAI API Key")
     anthropic_api_key: Optional[str] = Field(default=None, description="Anthropic API Key")
-    default_model: str = Field(default="gpt-4o", description="Default model for LangGraph agent")
+    default_model: str = Field(
+        default="openrouter/free",
+        description="Default chat model for LangGraph agent"
+    )
 
     if _has_pydantic_settings:
         model_config = SettingsConfigDict(
@@ -51,7 +81,6 @@ class Settings(BaseSettings):
             for field_name, f_info in fields.items():
                 env_val = os.getenv(field_name.upper())
                 if env_val is not None:
-                    # check type
                     ann = getattr(f_info, "annotation", getattr(f_info, "type_", str))
                     if ann is bool:
                         setattr(self, field_name, env_val.lower() in ("true", "1", "yes"))

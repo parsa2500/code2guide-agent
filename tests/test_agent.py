@@ -11,7 +11,12 @@ from src.agent.workflow import Code2GuideAgent
 class TestAgent(unittest.TestCase):
 
     def test_hybrid_indexer(self):
-        indexer = HybridIndexer()
+        # Force in-memory fallback so the unit test does not depend on Docker/Google.
+        indexer = HybridIndexer(
+            url=None,
+            location=":memory:",
+            embedding_provider="none",
+        )
         items = [
             IndexedItem(
                 id="route-1",
