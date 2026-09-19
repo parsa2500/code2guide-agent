@@ -13,14 +13,16 @@ from src.search.lexical_engine import RipgrepLexicalEngine
 from src.search.hybrid_indexer import (
     HybridIndexer,
     IndexedItem,
-    collection_name_for_workspace,
 )
-from src.parsers.ast_visitor import JSXASTVisitor, UIField, DiscoveredForm
+from src.parsers.ast_visitor import JSXASTVisitor, UIField, DiscoveredForm, UIButton, ComponentInspection
 from src.parsers.route_extractor import RouteExtractor, RouteTree, RouteNode
 from src.parsers.alias_resolver import PathAliasResolver
 from src.parsers.i18n_parser import I18nParser
 from src.parsers.validation_parser import ValidationParser, ValidationRule
 from src.parsers.openapi_parser import BackendContractExtractor, EndpointRequirement
+from src.knowledge.manager import get_index_manager
+from src.knowledge.schema import NodeType
+from src.knowledge.store import GraphStore
 
 try:
     from langchain_core.tools import tool
@@ -54,9 +56,14 @@ class Code2GuideToolbox:
         self.contract_extractor = BackendContractExtractor(self.workspace_path)
         self._cached_route_tree: Optional[RouteTree] = None
         self._indexed = False
-        self.hybrid_indexer = hybrid_indexer or HybridIndexer(
-            collection_name=collection_name_for_workspace(self.workspace_path),
-        )
+        self._graph_store: Optional[GraphStore] = None
+        self._index_manager = None
+        # Prefer process-level manager so /ask reuses index across requests
+        manager = get_index_manager(self.workspace_path, hybrid_indexer=hybrid_indexer)
+        manager.attach_toolbox(self)
+        if hybrid_indexer is not None:
+            self.hybrid_indexer = hybrid_indexer
+            manager.hybrid_indexer = hybrid_indexer
 
     def get_route_tree(self) -> RouteTree:
         """Caches and returns the workspace route tree (enriched with pageLabels when missing)."""
@@ -254,8 +261,19 @@ class Code2GuideToolbox:
         scored.sort(key=lambda x: x[0], reverse=True)
         return [ep for _, ep in scored[:limit]]
 
+    @property
+    def graph_store(self) -> GraphStore:
+        if self._graph_store is None:
+            manager = get_index_manager(self.workspace_path)
+            manager.attach_toolbox(self)
+        assert self._graph_store is not None
+        return self._graph_store
+
     def build_index_items(self) -> List[IndexedItem]:
-        """Build IndexedItem documents from the scanned route tree."""
+        """Build IndexedItem documents from the scanned route tree (shallow).
+
+        Prefer `index_workspace()` which runs the deep FrontendIndexer.
+        """
         tree = self.get_route_tree()
         items: List[IndexedItem] = []
         for route in tree.routes:
@@ -285,30 +303,146 @@ class Code2GuideToolbox:
         return items
 
     def index_workspace(self) -> Dict[str, Any]:
-        """Full reindex of route documents into hybrid search."""
-        items = self.build_index_items()
-        self.hybrid_indexer.index_items(items, rebuild=True)
-        self._indexed = True
-        return {
-            "indexed_count": len(items),
-            "use_vector": bool(self.hybrid_indexer.use_vector),
-            "collection_name": self.hybrid_indexer.collection_name,
-            "workspace_path": self.workspace_path,
-        }
+        """Full deep reindex: routes + forms/fields/buttons + i18n → graph + hybrid."""
+        manager = get_index_manager(self.workspace_path)
+        if self.hybrid_indexer is not None:
+            manager.hybrid_indexer = self.hybrid_indexer
+        result = manager.index_workspace(self, rebuild=True)
+        return result.to_dict()
 
     def ensure_indexed(self) -> Dict[str, Any]:
-        """Lazy-index on first ask when scan-workspace was not called yet."""
-        if self._indexed and self.hybrid_indexer._fallback_indexer.items:
+        """Use existing graph index when present; otherwise deep-index once."""
+        manager = get_index_manager(self.workspace_path)
+        if self.hybrid_indexer is not None:
+            manager.hybrid_indexer = self.hybrid_indexer
+        manager.attach_toolbox(self)
+
+        if manager.is_indexed and self.hybrid_indexer._fallback_indexer.items:
+            st = manager.status()
             return {
-                "indexed_count": len(self.hybrid_indexer._fallback_indexer.items),
+                "indexed_count": st.get("counts", {}).get("total_nodes")
+                or len(self.hybrid_indexer._fallback_indexer.items),
                 "use_vector": bool(self.hybrid_indexer.use_vector),
                 "collection_name": self.hybrid_indexer.collection_name,
                 "workspace_path": self.workspace_path,
                 "lazy": False,
+                "from_store": True,
             }
+
+        if manager.is_indexed and not self.hybrid_indexer._fallback_indexer.items:
+            result = manager.index_workspace(self, rebuild=True)
+            out = result.to_dict()
+            out["lazy"] = True
+            out["from_store"] = False
+            return out
+
         result = self.index_workspace()
         result["lazy"] = True
+        result["from_store"] = False
         return result
+
+    def index_status(self) -> Dict[str, Any]:
+        manager = get_index_manager(self.workspace_path)
+        if self.hybrid_indexer is not None:
+            manager.hybrid_indexer = self.hybrid_indexer
+        return manager.status()
+
+    def search_index_labels(self, query: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """Search indexed i18n/field/button nodes before falling back to ripgrep."""
+        store = self.graph_store
+        if not store.status().get("exists"):
+            return []
+        nodes = store.search_nodes(
+            query,
+            node_types=[
+                NodeType.I18N_STRING.value,
+                NodeType.FORM_FIELD.value,
+                NodeType.UI_BUTTON.value,
+                NodeType.FORM.value,
+                NodeType.ROUTE.value,
+            ],
+            limit=limit,
+        )
+        matches = []
+        for n in nodes:
+            matches.append(
+                {
+                    "file_path": n.file_path or "",
+                    "line_number": int((n.payload or {}).get("line_number") or 0),
+                    "line_content": n.title or (n.payload or {}).get("value") or "",
+                    "context_before": [],
+                    "context_after": [],
+                    "node_id": n.id,
+                    "node_type": n.node_type.value if hasattr(n.node_type, "value") else str(n.node_type),
+                    "from_index": True,
+                }
+            )
+        return matches
+
+    def forms_from_index(self, file_paths: Optional[List[str]] = None) -> List[DiscoveredForm]:
+        """Rehydrate DiscoveredForm models from the graph store."""
+        store = self.graph_store
+        if not store.status().get("exists"):
+            return []
+        form_nodes = (
+            store.forms_for_files(file_paths)
+            if file_paths
+            else store.list_nodes(NodeType.FORM)
+        )
+        forms: List[DiscoveredForm] = []
+        for fn in form_nodes:
+            detail = store.form_details(fn)
+            fields = [
+                UIField(
+                    name=(f.payload or {}).get("name") or "",
+                    field_type=(f.payload or {}).get("field_type") or "text",
+                    label=(f.payload or {}).get("label") or f.title,
+                    placeholder=(f.payload or {}).get("placeholder"),
+                    required=bool((f.payload or {}).get("required")),
+                    validation_message=(f.payload or {}).get("validation_message"),
+                    line_number=int((f.payload or {}).get("line_number") or 1),
+                )
+                for f in detail["fields"]
+            ]
+            buttons = [
+                UIButton(
+                    label=(b.payload or {}).get("label") or b.title,
+                    name=(b.payload or {}).get("name"),
+                    action_type=(b.payload or {}).get("action_type") or "button",
+                    is_submit=bool((b.payload or {}).get("is_submit")),
+                    line_number=int((b.payload or {}).get("line_number") or 1),
+                )
+                for b in detail["buttons"]
+            ]
+            forms.append(
+                DiscoveredForm(
+                    form_name=(fn.payload or {}).get("form_name") or fn.title,
+                    file_path=fn.file_path,
+                    fields=fields,
+                    buttons=buttons,
+                    start_line=int((fn.payload or {}).get("start_line") or 1),
+                    end_line=int((fn.payload or {}).get("end_line") or 1),
+                )
+            )
+        return forms
+
+    def components_from_index(self, file_paths: Optional[List[str]] = None) -> List[ComponentInspection]:
+        forms = self.forms_from_index(file_paths)
+        by_file: Dict[str, List[DiscoveredForm]] = {}
+        for f in forms:
+            by_file.setdefault(f.file_path, []).append(f)
+        comps: List[ComponentInspection] = []
+        for fpath, flist in by_file.items():
+            comps.append(
+                ComponentInspection(
+                    file_path=fpath,
+                    component_name=Path(fpath).stem,
+                    forms=flist,
+                    standalone_fields=[],
+                    standalone_buttons=[],
+                )
+            )
+        return comps
 
     def hybrid_search(self, query: str, limit: int = 8) -> Dict[str, Any]:
         """Search indexed routes/components; returns serializable hits."""

@@ -1,7 +1,7 @@
 """API routes for Code2Guide Agent."""
 
 from typing import Optional, List, Dict, Any
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, status, Query
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
@@ -9,6 +9,7 @@ from src.core.config import settings
 from src.core.markdown_guide import normalize_guide_markdown
 from src.agent.workflow import Code2GuideAgent
 from src.agent.tools import Code2GuideToolbox, dump_model
+from src.knowledge.manager import get_index_manager
 
 router = APIRouter(prefix="/api/v1", tags=["Code2Guide Agent"])
 
@@ -42,6 +43,36 @@ class ScanWorkspaceResponse(BaseModel):
     indexed_count: int = 0
     use_vector: bool = False
     message: str
+
+
+class IndexWorkspaceRequest(BaseModel):
+    """Request a full deep frontend index of a workspace."""
+    workspace_path: Optional[str] = Field(default=None, description="Target workspace root")
+    rebuild: bool = Field(default=True, description="Clear and rebuild graph + vectors")
+
+
+class IndexWorkspaceResponse(BaseModel):
+    """Summary of deep frontend indexing."""
+    workspace_path: str
+    duration_ms: float = 0.0
+    routes: int = 0
+    components: int = 0
+    forms: int = 0
+    form_fields: int = 0
+    ui_buttons: int = 0
+    i18n_strings: int = 0
+    edges: int = 0
+    indexed_count: int = 0
+    files_inspected: int = 0
+    use_vector: bool = False
+    collection_name: str = ""
+    db_path: str = ""
+    message: str = ""
+
+
+def _toolbox_for(workspace_path: Optional[str]) -> Code2GuideToolbox:
+    target = workspace_path or settings.target_workspace_path
+    return Code2GuideToolbox(workspace_path=target)
 
 
 @router.post("/ask", response_model=AskResponse, summary="Generate Persian UX Guide for codebase operation")
@@ -98,12 +129,68 @@ def ask_codebase_markdown(payload: AskRequest):
         )
 
 
-@router.post("/scan-workspace", response_model=ScanWorkspaceResponse, summary="Scan routes and components in workspace")
-def scan_workspace(payload: ScanWorkspaceRequest):
-    """Scans and indexes menu trees, React Router, and Next.js routes across workspace."""
+@router.post(
+    "/index-workspace",
+    response_model=IndexWorkspaceResponse,
+    summary="Deep-index all frontend routes, forms, fields, buttons, and i18n",
+)
+def index_workspace(payload: IndexWorkspaceRequest):
+    """Full frontend index into SQLite graph + hybrid/Qdrant vectors (no 6-file cap)."""
     target_ws = payload.workspace_path or settings.target_workspace_path
     try:
-        toolbox = Code2GuideToolbox(workspace_path=target_ws)
+        toolbox = _toolbox_for(target_ws)
+        manager = get_index_manager(target_ws)
+        manager.hybrid_indexer = toolbox.hybrid_indexer
+        result = manager.index_workspace(toolbox, rebuild=payload.rebuild)
+        d = result.to_dict()
+        return IndexWorkspaceResponse(
+            workspace_path=d["workspace_path"],
+            duration_ms=d.get("duration_ms", 0.0),
+            routes=d.get("routes", 0),
+            components=d.get("components", 0),
+            forms=d.get("forms", 0),
+            form_fields=d.get("form_fields", 0),
+            ui_buttons=d.get("ui_buttons", 0),
+            i18n_strings=d.get("i18n_strings", 0),
+            edges=d.get("edges", 0),
+            indexed_count=d.get("indexed_count", 0),
+            files_inspected=d.get("files_inspected", 0),
+            use_vector=bool(d.get("use_vector")),
+            collection_name=d.get("collection_name") or "",
+            db_path=d.get("db_path") or "",
+            message=(
+                f"Indexed {d.get('routes', 0)} routes, {d.get('forms', 0)} forms, "
+                f"{d.get('form_fields', 0)} fields, {d.get('files_inspected', 0)} UI files "
+                f"in {d.get('duration_ms', 0)}ms."
+            ),
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error indexing workspace: {str(e)}"
+        )
+
+
+@router.get("/index/status", summary="Status of the persisted workspace knowledge index")
+def index_status(workspace_path: Optional[str] = Query(default=None)):
+    """Return whether a deep index exists, node counts, and last indexed time."""
+    target_ws = workspace_path or settings.target_workspace_path
+    try:
+        toolbox = _toolbox_for(target_ws)
+        return toolbox.index_status()
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error reading index status: {str(e)}"
+        )
+
+
+@router.post("/scan-workspace", response_model=ScanWorkspaceResponse, summary="Scan routes and components in workspace")
+def scan_workspace(payload: ScanWorkspaceRequest):
+    """Alias for deep index-workspace (kept for backward compatibility)."""
+    target_ws = payload.workspace_path or settings.target_workspace_path
+    try:
+        toolbox = _toolbox_for(target_ws)
         route_tree = toolbox.get_route_tree()
         routes_data = [dump_model(r) for r in route_tree.routes]
         index_info = toolbox.index_workspace()
@@ -115,8 +202,10 @@ def scan_workspace(payload: ScanWorkspaceRequest):
             indexed_count=index_info.get("indexed_count", 0),
             use_vector=bool(index_info.get("use_vector")),
             message=(
-                f"Workspace scanned successfully: {len(route_tree.routes)} routes discovered, "
-                f"{index_info.get('indexed_count', 0)} indexed "
+                f"[deprecated: prefer POST /index-workspace] "
+                f"Workspace indexed: {len(route_tree.routes)} routes, "
+                f"{index_info.get('forms', 0)} forms, "
+                f"{index_info.get('indexed_count', 0)} hybrid items "
                 f"(use_vector={index_info.get('use_vector')})."
             ),
         )

@@ -13,6 +13,7 @@ from src.parsers.route_extractor import RouteNode
 from src.agent.state import AgentState
 from src.agent.tools import Code2GuideToolbox, dump_model
 from src.agent.prompts import SYSTEM_PROMPT, UX_GUIDE_TEMPLATE
+from src.knowledge.schema import NodeType
 
 try:
     from langgraph.graph import StateGraph, END
@@ -64,6 +65,7 @@ class Code2GuideWorkflow:
         state.normalized_query = " ".join(keywords)
 
         index_info = self.toolbox.ensure_indexed()
+        from_store = bool(index_info.get("from_store"))
 
         route_res = self.toolbox.get_route_hierarchy(cleaned_query)
         matching_routes = [RouteNode(**r) for r in route_res.get("routes", [])]
@@ -76,7 +78,26 @@ class Code2GuideWorkflow:
                     if not any(x.path == r_node.path for x in matching_routes):
                         matching_routes.append(r_node)
 
-        hybrid_res = self.toolbox.hybrid_search(query, limit=8)
+        # Graph lexical search for routes when index exists
+        if self.toolbox.graph_store.status().get("exists"):
+            for n in self.toolbox.graph_store.search_nodes(
+                query,
+                node_types=[NodeType.ROUTE.value, NodeType.PAGE.value],
+                limit=10,
+            ):
+                path = (n.payload or {}).get("path") or ""
+                if path and not any(x.path == path for x in matching_routes):
+                    matching_routes.append(
+                        RouteNode(
+                            path=path,
+                            title=n.title or (n.payload or {}).get("title"),
+                            component_name=(n.payload or {}).get("component_name"),
+                            file_path=n.file_path or None,
+                            breadcrumbs=list((n.payload or {}).get("breadcrumbs") or []),
+                        )
+                    )
+
+        hybrid_res = self.toolbox.hybrid_search(query, limit=12)
         hybrid_hits = hybrid_res.get("hits", [])
         state.hybrid_hits = hybrid_hits
         for r_node in self.toolbox.routes_from_hybrid_hits(hybrid_hits):
@@ -95,11 +116,9 @@ class Code2GuideWorkflow:
         state.identified_routes = matching_routes
         state.extracted_breadcrumbs = best_crumbs
 
-        # RBAC from frontend Permissions bindings + related OpenAPI endpoints
         route_paths = [r.path for r in matching_routes]
         state.required_roles = self.toolbox.roles_for_routes(route_paths)
         state.api_endpoints = self.toolbox.related_api_endpoints(state.query)
-        # Also pull roles documented on matched API ops
         for ep in state.api_endpoints:
             for role in ep.roles_required:
                 if role not in state.required_roles:
@@ -109,7 +128,7 @@ class Code2GuideWorkflow:
             f"Discovered {len(matching_routes)} candidate routes"
             + (f", roles={state.required_roles}" if state.required_roles else "")
             + f"; Hybrid hits={len(hybrid_hits)} use_vector={hybrid_res.get('use_vector')} "
-            + f"indexed={index_info.get('indexed_count')}"
+            + f"indexed={index_info.get('indexed_count')} from_store={from_store}"
         )
         return dump_model(state)
 
@@ -117,27 +136,39 @@ class Code2GuideWorkflow:
         keywords = self.normalizer.extract_keywords(state.query)
         all_matches = []
         seen_lines = set()
+        used_index = False
 
-        res = self.toolbox.search_persian_labels(state.normalized_query or state.query)
-        for m in res.get("matches", []):
-            k = (m["file_path"], m["line_number"])
-            if k not in seen_lines:
-                seen_lines.add(k)
-                all_matches.append(m)
-
-        for kw in keywords:
-            sub = self.toolbox.search_persian_labels(kw)
-            for m in sub.get("matches", []):
-                k = (m["file_path"], m["line_number"])
+        # Prefer knowledge-graph / hybrid label hits
+        for q in [state.normalized_query or state.query, *keywords]:
+            if not q:
+                continue
+            for m in self.toolbox.search_index_labels(q, limit=15):
+                used_index = True
+                k = (m["file_path"], m["line_number"], m.get("line_content"))
                 if k not in seen_lines:
                     seen_lines.add(k)
                     all_matches.append(m)
 
-        # Synthetic lexical-like matches from hybrid file hits so inspect sees them
+        # Ripgrep only as fallback when index yields nothing useful
+        if not all_matches:
+            res = self.toolbox.search_persian_labels(state.normalized_query or state.query)
+            for m in res.get("matches", []):
+                k = (m["file_path"], m["line_number"])
+                if k not in seen_lines:
+                    seen_lines.add(k)
+                    all_matches.append(m)
+            for kw in keywords:
+                sub = self.toolbox.search_persian_labels(kw)
+                for m in sub.get("matches", []):
+                    k = (m["file_path"], m["line_number"])
+                    if k not in seen_lines:
+                        seen_lines.add(k)
+                        all_matches.append(m)
+
         for hit in state.hybrid_hits:
             fpath = hit.get("file_path") or ""
             if fpath.endswith((".tsx", ".jsx", ".vue")):
-                k = (fpath, 0)
+                k = (fpath, 0, hit.get("title") or "")
                 if k not in seen_lines:
                     seen_lines.add(k)
                     all_matches.append(
@@ -147,16 +178,25 @@ class Code2GuideWorkflow:
                             "line_content": hit.get("title") or "",
                             "context_before": [],
                             "context_after": [],
+                            "from_index": True,
                         }
                     )
 
-        target_files = {m["file_path"] for m in all_matches if m["file_path"].endswith((".tsx", ".jsx", ".vue"))}
-        state.steps_taken.append(f"Found {len(all_matches)} lexical matches across {len(target_files)} UI files")
+        target_files = {
+            m["file_path"]
+            for m in all_matches
+            if m.get("file_path", "").endswith((".tsx", ".jsx", ".vue"))
+        }
+        src = "index" if used_index else "ripgrep"
+        state.steps_taken.append(
+            f"Found {len(all_matches)} label matches via {src} across {len(target_files)} UI files"
+        )
         return dump_model(state)
 
     def node_inspect_ast(self, state: AgentState) -> Dict[str, Any]:
         target_files: Set[str] = set()
         ws_root = Path(state.workspace_path)
+        index_exists = bool(self.toolbox.graph_store.status().get("exists"))
 
         for r in state.identified_routes:
             if r.file_path and r.file_path.endswith((".tsx", ".jsx", ".vue")):
@@ -189,59 +229,106 @@ class Code2GuideWorkflow:
             fpath = (hit.get("file_path") or "").replace("\\", "/")
             if fpath.endswith((".tsx", ".jsx", ".vue")):
                 target_files.add(fpath)
-
-        keywords = self.normalizer.extract_keywords(state.query)
-        for kw in keywords:
-            sub = self.toolbox.search_persian_labels(kw)
-            for m in sub.get("matches", []):
-                fpath = m["file_path"]
-                if fpath.endswith((".tsx", ".jsx", ".vue")):
-                    target_files.add(fpath)
-
-        if not target_files:
-            for p in ws_root.glob("**/*.tsx"):
-                if "node_modules" not in str(p) and not p.name.startswith("."):
-                    target_files.add(str(p.relative_to(ws_root)))
-                    if len(target_files) >= 5:
-                        break
+            # Field/form hits may only carry form metadata — still use file_path
+            meta = hit.get("metadata") or {}
+            form_id = meta.get("form_id") or ""
+            if form_id.startswith("form:") and ":" in form_id:
+                # form:{path}:{idx}
+                parts = form_id.split(":")
+                if len(parts) >= 2:
+                    candidate = ":".join(parts[1:-1]) if len(parts) > 2 else parts[1]
+                    if candidate.endswith((".tsx", ".jsx", ".vue")):
+                        target_files.add(candidate)
 
         discovered_forms: List[DiscoveredForm] = []
         inspected_comps: List[ComponentInspection] = []
         validation_notes: List[str] = []
+        source = "live_ast"
 
-        sorted_files = sorted(
-            list(target_files),
-            key=lambda x: (
-                0 if "pages" in x.lower() or "views" in x.lower() or "create" in x.lower() or "form" in x.lower() else 1
+        if index_exists:
+            # Retrieval-first: rehydrate forms from graph for matched files (or all if empty)
+            file_list = sorted(target_files) if target_files else None
+            indexed_forms = self.toolbox.forms_from_index(file_list)
+            if not indexed_forms and target_files:
+                # Try without filter if path mismatch
+                indexed_forms = self.toolbox.forms_from_index(None)
+                # Keep only forms whose file appears in hybrid/route targets or query hits
+                if target_files:
+                    indexed_forms = [
+                        f for f in indexed_forms if f.file_path in target_files
+                    ] or indexed_forms
+            if indexed_forms:
+                source = "index"
+                discovered_forms = indexed_forms
+                inspected_comps = self.toolbox.components_from_index(
+                    [f.file_path for f in indexed_forms]
+                )
+                for f in indexed_forms:
+                    # Pull validation notes stored on form payload if present
+                    node = self.toolbox.graph_store.list_nodes(NodeType.FORM)
+                    for n in node:
+                        if n.file_path == f.file_path:
+                            for note in (n.payload or {}).get("validation_notes") or []:
+                                if note not in validation_notes:
+                                    validation_notes.append(note)
+
+        if not discovered_forms:
+            # Fallback: live AST with configurable limit (0 = unlimited)
+            keywords = self.normalizer.extract_keywords(state.query)
+            for kw in keywords:
+                sub = self.toolbox.search_persian_labels(kw)
+                for m in sub.get("matches", []):
+                    fpath = m["file_path"]
+                    if fpath.endswith((".tsx", ".jsx", ".vue")):
+                        target_files.add(fpath)
+
+            if not target_files:
+                for p in ws_root.glob("**/*.tsx"):
+                    if "node_modules" not in str(p) and not p.name.startswith("."):
+                        target_files.add(str(p.relative_to(ws_root)).replace("\\", "/"))
+                        if len(target_files) >= 5:
+                            break
+
+            sorted_files = sorted(
+                list(target_files),
+                key=lambda x: (
+                    0
+                    if "pages" in x.lower()
+                    or "views" in x.lower()
+                    or "create" in x.lower()
+                    or "form" in x.lower()
+                    else 1
+                ),
             )
-        )
+            limit = settings.ast_inspect_limit
+            files_to_parse = sorted_files if not limit or limit <= 0 else sorted_files[:limit]
 
-        for fpath in sorted_files[:6]:
-            inspection_data = self.toolbox.inspect_component(fpath)
-            if "error" not in inspection_data:
-                forms = [DiscoveredForm(**f) for f in inspection_data.get("forms", [])]
-                for note in inspection_data.get("validation_notes") or []:
-                    if note not in validation_notes:
-                        validation_notes.append(note)
-                if forms and (forms[0].fields or forms[0].buttons):
-                    discovered_forms.extend(forms)
-                    inspected_comps.append(
-                        ComponentInspection(
-                            file_path=fpath,
-                            component_name=inspection_data.get("component_name"),
-                            forms=forms,
-                            standalone_fields=[],
-                            standalone_buttons=[]
+            for fpath in files_to_parse:
+                inspection_data = self.toolbox.inspect_component(fpath)
+                if "error" not in inspection_data:
+                    forms = [DiscoveredForm(**f) for f in inspection_data.get("forms", [])]
+                    for note in inspection_data.get("validation_notes") or []:
+                        if note not in validation_notes:
+                            validation_notes.append(note)
+                    if forms and (forms[0].fields or forms[0].buttons):
+                        discovered_forms.extend(forms)
+                        inspected_comps.append(
+                            ComponentInspection(
+                                file_path=fpath,
+                                component_name=inspection_data.get("component_name"),
+                                forms=forms,
+                                standalone_fields=[],
+                                standalone_buttons=[],
+                            )
                         )
-                    )
+            source = "live_ast"
 
         state.discovered_forms = discovered_forms
         state.inspected_components = inspected_comps
         state.validation_notes = validation_notes
         state.steps_taken.append(
-            f"Inspected AST for {len(inspected_comps)} components, "
-            f"extracted {len(discovered_forms)} forms, "
-            f"{len(validation_notes)} validation notes"
+            f"Loaded forms via {source}: {len(inspected_comps)} components, "
+            f"{len(discovered_forms)} forms, {len(validation_notes)} validation notes"
         )
         return dump_model(state)
 

@@ -48,6 +48,17 @@ class Settings(BaseSettings):
     embedding_dim: int = Field(default=768, description="Embedding vector dimension")
     google_api_key: Optional[str] = Field(default=None, description="Google AI Studio API Key")
     ripgrep_path: str = Field(default="rg", description="Ripgrep binary path")
+    index_storage_path: str = Field(
+        default=".code2guide/index",
+        description="Directory for per-workspace SQLite knowledge graph DBs",
+    )
+    ast_inspect_limit: int = Field(
+        default=0,
+        description=(
+            "Max UI files to AST-inspect during /ask fallback when index is empty. "
+            "0 means unlimited. Deep index path never uses this cap."
+        ),
+    )
 
     # OpenRouter LLM
     openrouter_api_key: Optional[str] = Field(default=None, description="OpenRouter API Key")
