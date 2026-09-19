@@ -444,6 +444,172 @@ class Code2GuideToolbox:
             )
         return comps
 
+    @staticmethod
+    def is_backend_query(query: str) -> bool:
+        q = (query or "").lower()
+        keywords = [
+            "entity",
+            "جدول",
+            "سرویس",
+            "service",
+            "api",
+            "endpoint",
+            "کنترلر",
+            "controller",
+            "مدل",
+            "migration",
+            "دیتابیس",
+            "database",
+            "dbset",
+            "فیلد مدل",
+            "orm",
+            "backend",
+            "بک‌اند",
+            "بک اند",
+            "بکند",
+        ]
+        return any(k in q for k in keywords)
+
+    def search_backend(self, query: str, limit: int = 15) -> List[Dict[str, Any]]:
+        """Search indexed API/service/entity/table nodes."""
+        store = self.graph_store
+        if not store.status().get("exists"):
+            return []
+        nodes = store.search_nodes(
+            query,
+            node_types=[
+                NodeType.API_ENDPOINT.value,
+                NodeType.SERVICE.value,
+                NodeType.ENTITY.value,
+                NodeType.TABLE.value,
+            ],
+            limit=limit,
+        )
+        # Also blend hybrid hits of backend types
+        hybrid = self.hybrid_search(query, limit=limit).get("hits") or []
+        results: List[Dict[str, Any]] = []
+        seen = set()
+        for n in nodes:
+            seen.add(n.id)
+            results.append(
+                {
+                    "id": n.id,
+                    "title": n.title,
+                    "node_type": n.node_type.value if hasattr(n.node_type, "value") else str(n.node_type),
+                    "file_path": n.file_path,
+                    "payload": n.payload or {},
+                    "from_index": True,
+                }
+            )
+        for h in hybrid:
+            if h.get("item_type") not in ("api", "service", "entity", "table"):
+                continue
+            hid = h.get("id") or ""
+            if hid in seen:
+                continue
+            seen.add(hid)
+            results.append(
+                {
+                    "id": hid,
+                    "title": h.get("title") or "",
+                    "node_type": h.get("item_type") or "",
+                    "file_path": h.get("file_path") or "",
+                    "payload": h.get("metadata") or {},
+                    "from_index": True,
+                    "score": h.get("score"),
+                }
+            )
+        return results[:limit]
+
+    def get_entity(self, name_or_query: str) -> Optional[Dict[str, Any]]:
+        hits = self.search_backend(name_or_query, limit=10)
+        for h in hits:
+            if h.get("node_type") in ("entity", NodeType.ENTITY.value):
+                return h
+        # Direct id lookup
+        node = self.graph_store.get_node(f"entity:{name_or_query}")
+        if node:
+            return {
+                "id": node.id,
+                "title": node.title,
+                "node_type": NodeType.ENTITY.value,
+                "file_path": node.file_path,
+                "payload": node.payload or {},
+            }
+        return None
+
+    def get_api_endpoints_from_index(self, query: str = "", limit: int = 20) -> List[Dict[str, Any]]:
+        if query:
+            return [h for h in self.search_backend(query, limit=limit) if h.get("node_type") in ("api", NodeType.API_ENDPOINT.value)]
+        nodes = self.graph_store.list_nodes(NodeType.API_ENDPOINT, limit=limit)
+        return [
+            {
+                "id": n.id,
+                "title": n.title,
+                "node_type": NodeType.API_ENDPOINT.value,
+                "file_path": n.file_path,
+                "payload": n.payload or {},
+            }
+            for n in nodes
+        ]
+
+    def format_backend_markdown(self, hits: List[Dict[str, Any]]) -> str:
+        """Build a cited Markdown section for backend hits."""
+        if not hits:
+            return ""
+        lines: List[str] = ["### دانش بک‌اند (استناد به سورس)", ""]
+        for h in hits[:12]:
+            ntype = h.get("node_type") or ""
+            title = h.get("title") or h.get("id") or ""
+            fpath = h.get("file_path") or ""
+            payload = h.get("payload") or {}
+            cite = f"`{fpath}`" if fpath else "(فایل نامشخص)"
+            if ntype in ("entity", NodeType.ENTITY.value):
+                fields = payload.get("fields") or []
+                if fields and isinstance(fields[0], dict):
+                    field_bits = ", ".join(
+                        f"{f.get('name')} ({f.get('clr_type')})" for f in fields[:20]
+                    )
+                else:
+                    field_bits = ", ".join(str(f) for f in fields[:20])
+                table = payload.get("table_name") or ""
+                lines.append(f"- **Entity `{title}`** → جدول `{table}` — فایل: {cite}")
+                if field_bits:
+                    lines.append(f"  - فیلدها: {field_bits}")
+            elif ntype in ("service", NodeType.SERVICE.value):
+                methods = payload.get("methods") or []
+                if methods and isinstance(methods[0], dict):
+                    mnames = ", ".join(m.get("name", "") for m in methods[:15])
+                else:
+                    mnames = ", ".join(str(m) for m in (payload.get("methods") or [])[:15])
+                lines.append(f"- **Service `{title}`** — فایل: {cite}")
+                if mnames:
+                    lines.append(f"  - متدها: {mnames}")
+            elif ntype in ("api", NodeType.API_ENDPOINT.value):
+                method = payload.get("method") or ""
+                path = payload.get("path") or title
+                action = payload.get("action_name") or ""
+                roles = payload.get("roles") or []
+                lines.append(
+                    f"- **API `{method} {path}`**"
+                    + (f" ({action})" if action else "")
+                    + f" — فایل: {cite}"
+                )
+                if roles:
+                    lines.append(f"  - Roles: {', '.join(roles)}")
+            elif ntype in ("table", NodeType.TABLE.value):
+                cols = payload.get("columns") or []
+                if cols and isinstance(cols[0], dict):
+                    cbits = ", ".join(f"{c.get('name')}:{c.get('sql_type')}" for c in cols[:20])
+                else:
+                    cbits = ", ".join(str(c) for c in cols[:20])
+                lines.append(f"- **Table `{title}`** — فایل: {cite}")
+                if cbits:
+                    lines.append(f"  - ستون‌ها: {cbits}")
+            else:
+                lines.append(f"- **{ntype} `{title}`** — فایل: {cite}")
+        return "\n".join(lines)
+
     def hybrid_search(self, query: str, limit: int = 8) -> Dict[str, Any]:
         """Search indexed routes/components; returns serializable hits."""
         hits = self.hybrid_indexer.search(query, limit=limit)

@@ -1,4 +1,4 @@
-"""Knowledge graph schema, SQLite store, and frontend indexing."""
+"""Knowledge graph schema, SQLite store, and frontend/backend indexing."""
 
 from src.knowledge.schema import (
     EdgeType,
@@ -9,6 +9,7 @@ from src.knowledge.schema import (
 from src.knowledge.store import GraphStore
 from src.knowledge.manager import WorkspaceIndexManager, get_index_manager
 from src.knowledge.indexer import FrontendIndexer, IndexResult
+from src.knowledge.backend_indexer import BackendIndexer
 
 __all__ = [
     "NodeType",
@@ -19,5 +20,6 @@ __all__ = [
     "WorkspaceIndexManager",
     "get_index_manager",
     "FrontendIndexer",
+    "BackendIndexer",
     "IndexResult",
 ]

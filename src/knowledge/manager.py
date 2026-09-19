@@ -69,12 +69,33 @@ class WorkspaceIndexManager:
 
     def index_workspace(self, toolbox: "Code2GuideToolbox", *, rebuild: bool = True) -> "IndexResult":
         from src.knowledge.indexer import FrontendIndexer
+        from src.knowledge.backend_indexer import BackendIndexer
 
         toolbox.hybrid_indexer = self.hybrid_indexer
         toolbox._graph_store = self.graph_store
         toolbox._index_manager = self
-        indexer = FrontendIndexer(toolbox, self.graph_store)
-        result = indexer.index(rebuild=rebuild)
+
+        fe = FrontendIndexer(toolbox, self.graph_store)
+        result = fe.index(rebuild=rebuild)
+
+        be = BackendIndexer(toolbox, self.graph_store)
+        be_info = be.index(rebuild=False)
+
+        # Merge backend counts into the combined IndexResult
+        result.api_endpoints = int(be_info.get("api_endpoints") or 0)
+        result.services = int(be_info.get("services") or 0)
+        result.entities = int(be_info.get("entities") or 0)
+        result.tables = int(be_info.get("tables") or 0)
+        result.backend_skipped = bool(be_info.get("skipped"))
+        result.edges = int(result.edges or 0) + int(be_info.get("edges") or 0)
+        result.indexed_count = int(result.indexed_count or 0) + int(be_info.get("indexed_count") or 0)
+        result.duration_ms = round(
+            float(result.duration_ms or 0) + float(be_info.get("duration_ms") or 0), 2
+        )
+        stats = dict(result.stats or {})
+        stats["backend"] = be_info
+        result.stats = stats
+        self.graph_store.mark_indexed(result.to_dict())
         self._last_result = result.to_dict()
         toolbox._indexed = True
         return result

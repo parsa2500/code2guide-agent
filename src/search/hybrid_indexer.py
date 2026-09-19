@@ -331,10 +331,12 @@ class HybridIndexer:
                 embeddings = self._embedder.embed(texts)
 
                 points = []
-                for idx, (item, emb) in enumerate(zip(items, embeddings)):
+                for item, emb in zip(items, embeddings):
+                    # Stable id so append (rebuild=False) does not overwrite other points
+                    point_id = int(hashlib.md5(item.id.encode("utf-8")).hexdigest()[:15], 16)
                     points.append(
                         PointStruct(
-                            id=idx,
+                            id=point_id,
                             vector=list(emb),
                             payload={
                                 "item_id": item.id,

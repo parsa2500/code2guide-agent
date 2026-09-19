@@ -32,6 +32,12 @@ class IndexResult:
     collection_name: str = ""
     files_inspected: int = 0
     db_path: str = ""
+    # Phase 2 backend
+    api_endpoints: int = 0
+    services: int = 0
+    entities: int = 0
+    tables: int = 0
+    backend_skipped: bool = False
     stats: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -50,6 +56,11 @@ class IndexResult:
             "collection_name": self.collection_name,
             "files_inspected": self.files_inspected,
             "db_path": self.db_path,
+            "api_endpoints": self.api_endpoints,
+            "services": self.services,
+            "entities": self.entities,
+            "tables": self.tables,
+            "backend_skipped": self.backend_skipped,
             "stats": self.stats,
         }
 

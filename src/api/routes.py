@@ -52,7 +52,7 @@ class IndexWorkspaceRequest(BaseModel):
 
 
 class IndexWorkspaceResponse(BaseModel):
-    """Summary of deep frontend indexing."""
+    """Summary of deep frontend + backend indexing."""
     workspace_path: str
     duration_ms: float = 0.0
     routes: int = 0
@@ -61,12 +61,17 @@ class IndexWorkspaceResponse(BaseModel):
     form_fields: int = 0
     ui_buttons: int = 0
     i18n_strings: int = 0
+    api_endpoints: int = 0
+    services: int = 0
+    entities: int = 0
+    tables: int = 0
     edges: int = 0
     indexed_count: int = 0
     files_inspected: int = 0
     use_vector: bool = False
     collection_name: str = ""
     db_path: str = ""
+    backend_skipped: bool = False
     message: str = ""
 
 
@@ -132,10 +137,10 @@ def ask_codebase_markdown(payload: AskRequest):
 @router.post(
     "/index-workspace",
     response_model=IndexWorkspaceResponse,
-    summary="Deep-index all frontend routes, forms, fields, buttons, and i18n",
+    summary="Deep-index frontend UI and .NET backend into the knowledge graph",
 )
 def index_workspace(payload: IndexWorkspaceRequest):
-    """Full frontend index into SQLite graph + hybrid/Qdrant vectors (no 6-file cap)."""
+    """Full frontend + backend index into SQLite graph + hybrid/Qdrant vectors."""
     target_ws = payload.workspace_path or settings.target_workspace_path
     try:
         toolbox = _toolbox_for(target_ws)
@@ -152,15 +157,21 @@ def index_workspace(payload: IndexWorkspaceRequest):
             form_fields=d.get("form_fields", 0),
             ui_buttons=d.get("ui_buttons", 0),
             i18n_strings=d.get("i18n_strings", 0),
+            api_endpoints=d.get("api_endpoints", 0),
+            services=d.get("services", 0),
+            entities=d.get("entities", 0),
+            tables=d.get("tables", 0),
             edges=d.get("edges", 0),
             indexed_count=d.get("indexed_count", 0),
             files_inspected=d.get("files_inspected", 0),
             use_vector=bool(d.get("use_vector")),
             collection_name=d.get("collection_name") or "",
             db_path=d.get("db_path") or "",
+            backend_skipped=bool(d.get("backend_skipped")),
             message=(
-                f"Indexed {d.get('routes', 0)} routes, {d.get('forms', 0)} forms, "
-                f"{d.get('form_fields', 0)} fields, {d.get('files_inspected', 0)} UI files "
+                f"Indexed FE: {d.get('routes', 0)} routes, {d.get('forms', 0)} forms; "
+                f"BE: {d.get('api_endpoints', 0)} APIs, {d.get('services', 0)} services, "
+                f"{d.get('entities', 0)} entities, {d.get('tables', 0)} tables "
                 f"in {d.get('duration_ms', 0)}ms."
             ),
         )

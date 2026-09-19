@@ -14,11 +14,11 @@
 | ساخت راهنمای UX فارسی | آماده (LLM یا template) |
 | ایندکس یک‌باره کل پروژه (فرانت) | آماده (`POST /index-workspace` + `src/knowledge/`) |
 | Hybrid / Qdrant در مسیر `/ask` | وصل؛ retrieval-first از گراف + بردار |
-| پارس بک‌اند (API / service / entity / DB) | نیست (فاز ۲) |
+| پارس بک‌اند (API / service / entity / DB) | آماده برای .NET (`src/parsers/dotnet/` + BackendIndexer) |
 | گراف رابطه فرانت ↔ بک | نیست (فاز ۳) |
-| Q&A آزاد روی کل سیستم | نیست (فاز ۴) |
+| Q&A آزاد روی کل سیستم | جزئی — سؤال بک با استناد؛ UX کامل؛ end-to-end نه (فاز ۴) |
 
-**جمع‌بندی مبدأ:** فاز ۰ و ۱ انجام شده — کل فرانت را می‌توان یک‌بار ایندکس کرد و `/ask` از ایندکس می‌خواند. بک و tracer ف↔ب هنوز نیست.
+**جمع‌بندی مبدأ:** فاز ۰ تا ۲ انجام شده — فرانت + بک .NET در یک workspace واحد ایندکس می‌شوند. tracer ف↔ب هنوز نیست.
 
 ---
 
@@ -93,21 +93,15 @@
 
 ### فاز ۲ — پارس بک‌اند (منطق + کلاس + entity + DB)
 
-**هدف:** بک را مثل فرانت، ساختاریافته بفهمد.
+**هدف:** بک را مثل فرانت، ساختاریافته بفهمد. ✅ برای .NET
 
-1. **کشف استک بک** (پلاگین‌پذیر)
-   - مثلاً FastAPI / Django / Nest / Spring / .NET — تشخیص از فایل‌های مشخصه
-2. **استخراج API surface**
-   - path، method، auth، request/response body
-3. **استخراج لایه دامنه**
-   - service / use-case / class / functionهای اصلی
-4. **استخراج مدل داده**
-   - ORM entity، field type، relation (1-1, 1-N, N-N)
-   - migration / SQL schema → `Table` nodes
-5. **ایندکس بک**
-   - همان store گراف + بردار روی docstring/نام سیمبل‌ها
+1. **کشف استک بک** ✅ — `StackDetector` (.NET via `.csproj`/Controllers/…)
+2. **استخراج API surface** ✅ — Controllers + Minimal APIs + OpenAPI merge
+3. **استخراج لایه دامنه** ✅ — `*Service` / `*Handler` / `*UseCase`
+4. **استخراج مدل داده** ✅ — EF entities + Migrations → `Table`
+5. **ایندکس بک** ✅ — همان SQLite graph + hybrid؛ پاسخ `/ask` برای سؤال بک
 
-**معیار آمادگی فاز ۲:** سؤال‌هایی مثل «entity مناقصه چه فیلدهایی دارد؟» یا «کدام سرویس create می‌کند؟» با استناد جواب داده شود.
+**معیار آمادگی فاز ۲:** سؤال‌هایی مثل «entity مناقصه چه فیلدهایی دارد؟» یا «کدام سرویس create می‌کند؟» با استناد جواب داده شود. ✅ (`sample_workspace/backend`)
 
 ---
 
@@ -158,9 +152,9 @@
 | 2 | `POST /index-workspace` + اسکن کامل روت فرانت | ۱ ✅ |
 | 3 | پارس عمیق همه UI forms (بدون سقف ۶) | ۱ ✅ |
 | 4 | وصل Qdrant/Hybrid به ایندکس و `/ask` | ۱ ✅ |
-| 5 | پارسر API بک | ۲ |
-| 6 | پارسر service/class | ۲ |
-| 7 | پارسر entity + DB schema | ۲ |
+| 5 | پارسر API بک (.NET) | ۲ ✅ |
+| 6 | پارسر service/class | ۲ ✅ |
+| 7 | پارسر entity + DB schema | ۲ ✅ |
 | 8 | Tracer فراخوانی ف↔ب | ۳ |
 | 9 | لینک فیلد فرم ↔ DTO ↔ ستون | ۳ |
 | 10 | ابزارهای Q&A + planner | ۴ |
@@ -173,7 +167,7 @@
 - مسیر workspace قابل دسترس برای سرویس (`TARGET_WORKSPACE_PATH` یا `workspace_path`)
 - برای کیفیت توضیح: `OPENROUTER_API_KEY` (اختیاری برای استخراج؛ مفید برای پاسخ)
 - برای semantic search: Qdrant (`docker compose up`) + در صورت نیاز `GOOGLE_API_KEY`
-- مشخص بودن استک بک‌اند هدف (برای اولویت پارسر فاز ۲)
+- مشخص بودن استک بک‌اند هدف: **.NET** (پیاده‌سازی‌شده)؛ استک‌های دیگر بعداً به‌صورت پلاگین
 
 ---
 
@@ -200,6 +194,6 @@
 
 ## قدم بعدی پیشنهادی بعد از این سند
 
-فاز ۰ و ۱ پیاده‌سازی شده‌اند (`src/knowledge/`, `POST /api/v1/index-workspace`, `/ask` retrieval-first).
+فاز ۰ تا ۲ پیاده‌سازی شده‌اند. workspace را به صورت والد واحد (`frontend/` + `backend/`) بدهید.
 
-قدم بعدی: **فاز ۲** — پارس بک‌اند. استک بک‌اند پروژهٔ هدف را مشخص کنید تا پارسر از روز اول درست انتخاب شود.
+قدم بعدی: **فاز ۳** — tracer رابطه فرانت ↔ بک (fetch/axios → API → service → entity → table).

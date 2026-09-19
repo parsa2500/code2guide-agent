@@ -116,6 +116,24 @@ class Code2GuideWorkflow:
         state.identified_routes = matching_routes
         state.extracted_breadcrumbs = best_crumbs
 
+        state.is_backend_query = self.toolbox.is_backend_query(query)
+        backend_hits = self.toolbox.search_backend(query, limit=12)
+        # If hybrid already returned backend item types, ensure they're included
+        for hit in hybrid_hits:
+            if hit.get("item_type") in ("api", "service", "entity", "table"):
+                hid = hit.get("id") or ""
+                if hid and not any(b.get("id") == hid for b in backend_hits):
+                    backend_hits.append(
+                        {
+                            "id": hid,
+                            "title": hit.get("title") or "",
+                            "node_type": hit.get("item_type"),
+                            "file_path": hit.get("file_path") or "",
+                            "payload": hit.get("metadata") or {},
+                        }
+                    )
+        state.backend_hits = backend_hits
+
         route_paths = [r.path for r in matching_routes]
         state.required_roles = self.toolbox.roles_for_routes(route_paths)
         state.api_endpoints = self.toolbox.related_api_endpoints(state.query)
@@ -129,6 +147,7 @@ class Code2GuideWorkflow:
             + (f", roles={state.required_roles}" if state.required_roles else "")
             + f"; Hybrid hits={len(hybrid_hits)} use_vector={hybrid_res.get('use_vector')} "
             + f"indexed={index_info.get('indexed_count')} from_store={from_store}"
+            + f"; backend_hits={len(backend_hits)} backend_query={state.is_backend_query}"
         )
         return dump_model(state)
 
@@ -423,6 +442,24 @@ class Code2GuideWorkflow:
 
         task_title = state.query.replace("چگونه", "").replace("کنم؟", "").replace("کنیم؟", "").strip() or "عملیات"
 
+        backend_md = self.toolbox.format_backend_markdown(state.backend_hits or [])
+
+        # Pure backend Q&A: answer from indexed graph with citations (skip UX template noise)
+        if state.is_backend_query and backend_md and (
+            not state.discovered_forms or len(state.backend_hits) > 0
+        ):
+            guide = (
+                f"## پاسخ بر اساس ایندکس بک‌اند\n\n"
+                f"**پرسش:** {state.query}\n\n"
+                f"{backend_md}\n"
+            )
+            state.final_persian_guide = normalize_guide_markdown(guide)
+            state.status = "completed"
+            state.steps_taken.append(
+                f"Synthesized backend answer from {len(state.backend_hits)} indexed symbols"
+            )
+            return dump_model(state)
+
         # 2. Attempt Real LLM Synthesis if API key is provided (OpenRouter preferred)
         api_key = (
             settings.openrouter_api_key
@@ -464,6 +501,8 @@ class Code2GuideWorkflow:
             fields_breakdown=fields_section,
             action_description=action_section
         )
+        if backend_md:
+            guide = guide.rstrip() + "\n\n" + backend_md + "\n"
 
         state.final_persian_guide = normalize_guide_markdown(guide)
         state.status = "completed"
