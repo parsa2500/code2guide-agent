@@ -1,24 +1,32 @@
 """ReAct Agent tools for codebase UX discovery.
 
 Provides tools for lexical Persian label search, component AST inspection,
-and routing hierarchy resolution.
+and routing hierarchy resolution — plus alias/i18n/validation/OpenAPI helpers.
 """
 
-import os
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 from src.core.config import settings
 from src.core.normalizer import default_normalizer
-from src.search.lexical_engine import RipgrepLexicalEngine, SearchResult
-from src.parsers.ast_visitor import JSXASTVisitor, ComponentInspection
+from src.search.lexical_engine import RipgrepLexicalEngine
+from src.search.hybrid_indexer import (
+    HybridIndexer,
+    IndexedItem,
+)
+from src.parsers.ast_visitor import JSXASTVisitor, UIField, DiscoveredForm, UIButton, ComponentInspection
 from src.parsers.route_extractor import RouteExtractor, RouteTree, RouteNode
+from src.parsers.alias_resolver import PathAliasResolver
+from src.parsers.i18n_parser import I18nParser
+from src.parsers.validation_parser import ValidationParser, ValidationRule
+from src.parsers.openapi_parser import BackendContractExtractor, EndpointRequirement
+from src.knowledge.manager import get_index_manager
+from src.knowledge.schema import NodeType
+from src.knowledge.store import GraphStore
 
 try:
     from langchain_core.tools import tool
-    _has_langchain_tool = True
 except ImportError:
-    _has_langchain_tool = False
     def tool(fn):
         return fn
 
@@ -33,18 +41,42 @@ def dump_model(obj: Any) -> Dict[str, Any]:
 class Code2GuideToolbox:
     """Toolbox encapsulating workspace state and execution helpers."""
 
-    def __init__(self, workspace_path: Optional[str] = None):
+    def __init__(
+        self,
+        workspace_path: Optional[str] = None,
+        hybrid_indexer: Optional[HybridIndexer] = None,
+    ):
         self.workspace_path = workspace_path or settings.target_workspace_path
         self.normalizer = default_normalizer
         self.lexical_engine = RipgrepLexicalEngine(self.workspace_path, normalizer=self.normalizer)
         self.ast_visitor = JSXASTVisitor(normalizer=self.normalizer)
         self.route_extractor = RouteExtractor(normalizer=self.normalizer)
+        self.alias_resolver = PathAliasResolver(self.workspace_path)
+        self.i18n_parser = I18nParser(self.workspace_path)
+        self.contract_extractor = BackendContractExtractor(self.workspace_path)
         self._cached_route_tree: Optional[RouteTree] = None
+        self._indexed = False
+        self._graph_store: Optional[GraphStore] = None
+        self._index_manager = None
+        # Prefer process-level manager so /ask reuses index across requests
+        manager = get_index_manager(self.workspace_path, hybrid_indexer=hybrid_indexer)
+        manager.attach_toolbox(self)
+        if hybrid_indexer is not None:
+            self.hybrid_indexer = hybrid_indexer
+            manager.hybrid_indexer = hybrid_indexer
 
     def get_route_tree(self) -> RouteTree:
-        """Caches and returns the workspace route tree."""
+        """Caches and returns the workspace route tree (enriched with pageLabels when missing)."""
         if self._cached_route_tree is None:
-            self._cached_route_tree = self.route_extractor.scan_workspace(self.workspace_path)
+            tree = self.route_extractor.scan_workspace(self.workspace_path)
+            for route in tree.routes:
+                if not route.title:
+                    page_id = (route.path or "").lstrip("/")
+                    label = self.i18n_parser.label_for_page_id(page_id)
+                    if label:
+                        route.title = label
+            self.route_extractor._enrich_breadcrumbs(tree.routes)
+            self._cached_route_tree = tree
         return self._cached_route_tree
 
     def search_persian_labels(self, query: str, max_results: int = 15) -> Dict[str, Any]:
@@ -77,11 +109,22 @@ class Code2GuideToolbox:
         """Reads and parses a JSX/TSX/Vue UI component into forms, fields, and buttons."""
         full_path = Path(self.workspace_path) / file_path
         if not full_path.exists():
-            return {
-                "file_path": file_path,
-                "error": f"File not found: {file_path}",
-                "forms": []
-            }
+            # Try alias/relative resolution if a bare import-like path was passed
+            resolved = self.alias_resolver.resolve_import(file_path, Path(self.workspace_path))
+            if resolved and resolved.exists():
+                full_path = resolved
+                try:
+                    file_path = str(resolved.relative_to(Path(self.workspace_path).resolve())).replace("\\", "/")
+                except ValueError:
+                    pass
+            else:
+                return {
+                    "file_path": file_path,
+                    "error": f"File not found: {file_path}",
+                    "forms": [],
+                    "validation_rules": [],
+                    "validation_notes": [],
+                }
 
         try:
             with open(full_path, "r", encoding="utf-8", errors="replace") as f:
@@ -94,10 +137,21 @@ class Code2GuideToolbox:
             else:
                 snippet = "".join(lines)
 
-            inspection = self.ast_visitor.parse_source(snippet, file_path=file_path)
+            # Expand i18n t('...') before AST so labels become Persian literals
+            prepared = self.i18n_parser.replace_i18n_calls(snippet)
+            validation_rules = ValidationParser.extract_all(prepared)
+            inspection = self.ast_visitor.parse_source(prepared, file_path=file_path)
+
+            # Merge schema/RHF required flags onto discovered fields
+            self._merge_validation_into_forms(inspection.forms, validation_rules)
+            if inspection.standalone_fields:
+                self._merge_validation_into_fields(inspection.standalone_fields, validation_rules)
+
             forms_data = [dump_model(f) for f in inspection.forms]
             fields_data = [dump_model(f) for f in inspection.standalone_fields]
             buttons_data = [dump_model(b) for b in inspection.standalone_buttons]
+            rules_data = [dump_model(r) for r in validation_rules.values()]
+            notes = ValidationParser.as_notes(validation_rules)
 
             return {
                 "file_path": file_path,
@@ -105,14 +159,61 @@ class Code2GuideToolbox:
                 "forms": forms_data,
                 "standalone_fields": fields_data,
                 "standalone_buttons": buttons_data,
-                "total_lines": len(lines)
+                "validation_rules": rules_data,
+                "validation_notes": notes,
+                "total_lines": len(lines),
             }
         except Exception as e:
             return {
                 "file_path": file_path,
                 "error": str(e),
-                "forms": []
+                "forms": [],
+                "validation_rules": [],
+                "validation_notes": [],
             }
+
+    @staticmethod
+    def _merge_validation_into_fields(
+        fields: List[UIField],
+        rules: Dict[str, ValidationRule],
+    ) -> None:
+        for field in fields:
+            key = field.name
+            if not key or key not in rules:
+                continue
+            rule = rules[key]
+            if rule.is_required:
+                field.required = True
+            if rule.error_message and not field.validation_message:
+                field.validation_message = rule.error_message
+
+    @classmethod
+    def _merge_validation_into_forms(
+        cls,
+        forms: List[DiscoveredForm],
+        rules: Dict[str, ValidationRule],
+    ) -> None:
+        for form in forms:
+            cls._merge_validation_into_fields(form.fields, rules)
+            # Add schema-only fields missing from JSX
+            existing = {f.name for f in form.fields if f.name}
+            for name, rule in rules.items():
+                if name in existing:
+                    continue
+                form.fields.append(
+                    UIField(
+                        name=name,
+                        field_type="text",
+                        label=name,
+                        required=rule.is_required,
+                        validation_message=rule.error_message,
+                    )
+                )
+
+    def resolve_import_path(self, import_str: str, from_file: str) -> Optional[str]:
+        """Resolve TS/JS import to a workspace-relative path."""
+        from_path = Path(self.workspace_path) / from_file
+        return self.alias_resolver.resolve_to_relative(import_str, from_path)
 
     def get_route_hierarchy(self, component_or_title: str) -> Dict[str, Any]:
         """Finds the navigation path and breadcrumbs to a page or component."""
@@ -128,17 +229,735 @@ class Code2GuideToolbox:
             "query": component_or_title,
             "matched_count": len(matched_routes),
             "best_breadcrumbs": best_breadcrumbs,
-            "routes": routes_data
+            "routes": routes_data,
         }
+
+    def roles_for_routes(self, route_paths: List[str]) -> List[str]:
+        roles: List[str] = []
+        seen = set()
+        for path in route_paths:
+            for role in self.contract_extractor.roles_for_page_id(path):
+                if role not in seen:
+                    seen.add(role)
+                    roles.append(role)
+        return roles
+
+    def related_api_endpoints(self, query: str, limit: int = 8) -> List[EndpointRequirement]:
+        """Pick OpenAPI endpoints loosely related to the query keywords."""
+        endpoints = self.contract_extractor.scan_rbac_and_swagger()
+        q = (query or "").lower()
+        keywords = [w for w in self.normalizer.extract_keywords(query) if len(w) > 2]
+        scored = []
+        for ep in endpoints:
+            blob = f"{ep.path} {ep.method} {ep.summary or ''} {' '.join(ep.request_dto_fields)}".lower()
+            score = 0
+            if q and q in blob:
+                score += 5
+            for kw in keywords:
+                if kw.lower() in blob:
+                    score += 2
+            if score > 0:
+                scored.append((score, ep))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [ep for _, ep in scored[:limit]]
+
+    @property
+    def graph_store(self) -> GraphStore:
+        if self._graph_store is None:
+            manager = get_index_manager(self.workspace_path)
+            manager.attach_toolbox(self)
+        assert self._graph_store is not None
+        return self._graph_store
+
+    def build_index_items(self) -> List[IndexedItem]:
+        """Build IndexedItem documents from the scanned route tree (shallow).
+
+        Prefer `index_workspace()` which runs the deep FrontendIndexer.
+        """
+        tree = self.get_route_tree()
+        items: List[IndexedItem] = []
+        for route in tree.routes:
+            title = route.title or (route.breadcrumbs[-1] if route.breadcrumbs else route.path)
+            crumbs = " > ".join(route.breadcrumbs) if route.breadcrumbs else ""
+            content_parts = [
+                crumbs,
+                route.path or "",
+                route.component_name or "",
+                route.title or "",
+            ]
+            items.append(
+                IndexedItem(
+                    id=f"route:{route.path}",
+                    title=title or route.path,
+                    content=" ".join(p for p in content_parts if p).strip(),
+                    file_path=route.file_path or "",
+                    item_type="route",
+                    metadata={
+                        "path": route.path,
+                        "component_name": route.component_name,
+                        "breadcrumbs": list(route.breadcrumbs or []),
+                        "title": route.title,
+                    },
+                )
+            )
+        return items
+
+    def index_workspace(self) -> Dict[str, Any]:
+        """Full deep reindex: routes + forms/fields/buttons + i18n → graph + hybrid."""
+        manager = get_index_manager(self.workspace_path)
+        if self.hybrid_indexer is not None:
+            manager.hybrid_indexer = self.hybrid_indexer
+        result = manager.index_workspace(self, rebuild=True)
+        return result.to_dict()
+
+    def ensure_indexed(self) -> Dict[str, Any]:
+        """Use existing graph index when present; otherwise deep-index once."""
+        manager = get_index_manager(self.workspace_path)
+        if self.hybrid_indexer is not None:
+            manager.hybrid_indexer = self.hybrid_indexer
+        manager.attach_toolbox(self)
+
+        if manager.is_indexed and self.hybrid_indexer._fallback_indexer.items:
+            st = manager.status()
+            return {
+                "indexed_count": st.get("counts", {}).get("total_nodes")
+                or len(self.hybrid_indexer._fallback_indexer.items),
+                "use_vector": bool(self.hybrid_indexer.use_vector),
+                "collection_name": self.hybrid_indexer.collection_name,
+                "workspace_path": self.workspace_path,
+                "lazy": False,
+                "from_store": True,
+            }
+
+        if manager.is_indexed and not self.hybrid_indexer._fallback_indexer.items:
+            result = manager.index_workspace(self, rebuild=True)
+            out = result.to_dict()
+            out["lazy"] = True
+            out["from_store"] = False
+            return out
+
+        result = self.index_workspace()
+        result["lazy"] = True
+        result["from_store"] = False
+        return result
+
+    def index_status(self) -> Dict[str, Any]:
+        manager = get_index_manager(self.workspace_path)
+        if self.hybrid_indexer is not None:
+            manager.hybrid_indexer = self.hybrid_indexer
+        return manager.status()
+
+    def search_index_labels(self, query: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """Search indexed i18n/field/button nodes before falling back to ripgrep."""
+        store = self.graph_store
+        if not store.status().get("exists"):
+            return []
+        nodes = store.search_nodes(
+            query,
+            node_types=[
+                NodeType.I18N_STRING.value,
+                NodeType.FORM_FIELD.value,
+                NodeType.UI_BUTTON.value,
+                NodeType.FORM.value,
+                NodeType.ROUTE.value,
+            ],
+            limit=limit,
+        )
+        matches = []
+        for n in nodes:
+            matches.append(
+                {
+                    "file_path": n.file_path or "",
+                    "line_number": int((n.payload or {}).get("line_number") or 0),
+                    "line_content": n.title or (n.payload or {}).get("value") or "",
+                    "context_before": [],
+                    "context_after": [],
+                    "node_id": n.id,
+                    "node_type": n.node_type.value if hasattr(n.node_type, "value") else str(n.node_type),
+                    "from_index": True,
+                }
+            )
+        return matches
+
+    def forms_from_index(self, file_paths: Optional[List[str]] = None) -> List[DiscoveredForm]:
+        """Rehydrate DiscoveredForm models from the graph store."""
+        store = self.graph_store
+        if not store.status().get("exists"):
+            return []
+        form_nodes = (
+            store.forms_for_files(file_paths)
+            if file_paths
+            else store.list_nodes(NodeType.FORM)
+        )
+        forms: List[DiscoveredForm] = []
+        for fn in form_nodes:
+            detail = store.form_details(fn)
+            fields = [
+                UIField(
+                    name=(f.payload or {}).get("name") or "",
+                    field_type=(f.payload or {}).get("field_type") or "text",
+                    label=(f.payload or {}).get("label") or f.title,
+                    placeholder=(f.payload or {}).get("placeholder"),
+                    required=bool((f.payload or {}).get("required")),
+                    validation_message=(f.payload or {}).get("validation_message"),
+                    line_number=int((f.payload or {}).get("line_number") or 1),
+                )
+                for f in detail["fields"]
+            ]
+            buttons = [
+                UIButton(
+                    label=(b.payload or {}).get("label") or b.title,
+                    name=(b.payload or {}).get("name"),
+                    action_type=(b.payload or {}).get("action_type") or "button",
+                    is_submit=bool((b.payload or {}).get("is_submit")),
+                    line_number=int((b.payload or {}).get("line_number") or 1),
+                )
+                for b in detail["buttons"]
+            ]
+            forms.append(
+                DiscoveredForm(
+                    form_name=(fn.payload or {}).get("form_name") or fn.title,
+                    file_path=fn.file_path,
+                    fields=fields,
+                    buttons=buttons,
+                    start_line=int((fn.payload or {}).get("start_line") or 1),
+                    end_line=int((fn.payload or {}).get("end_line") or 1),
+                )
+            )
+        return forms
+
+    def components_from_index(self, file_paths: Optional[List[str]] = None) -> List[ComponentInspection]:
+        forms = self.forms_from_index(file_paths)
+        by_file: Dict[str, List[DiscoveredForm]] = {}
+        for f in forms:
+            by_file.setdefault(f.file_path, []).append(f)
+        comps: List[ComponentInspection] = []
+        for fpath, flist in by_file.items():
+            comps.append(
+                ComponentInspection(
+                    file_path=fpath,
+                    component_name=Path(fpath).stem,
+                    forms=flist,
+                    standalone_fields=[],
+                    standalone_buttons=[],
+                )
+            )
+        return comps
+
+    @staticmethod
+    def is_backend_query(query: str) -> bool:
+        q = (query or "").lower()
+        keywords = [
+            "entity",
+            "جدول",
+            "سرویس",
+            "service",
+            "api",
+            "endpoint",
+            "کنترلر",
+            "controller",
+            "مدل",
+            "migration",
+            "دیتابیس",
+            "database",
+            "dbset",
+            "فیلد مدل",
+            "orm",
+            "backend",
+            "بک‌اند",
+            "بک اند",
+            "بکند",
+        ]
+        return any(k in q for k in keywords)
+
+    @staticmethod
+    def is_flow_query(query: str) -> bool:
+        q = (query or "").lower()
+        keywords = [
+            "جریان",
+            "trace",
+            "end-to-end",
+            "end to end",
+            "از ui تا",
+            "تا db",
+            "تا دیتابیس",
+            "کدوم api",
+            "کدام api",
+            "چطور ذخیره",
+            "چگونه ذخیره",
+            "فلو",
+            "flow",
+            "زنجیره",
+            "از فرم تا",
+            "فراخوانی api",
+        ]
+        return any(k in q for k in keywords)
+
+    def trace_flow(self, from_ref: str) -> Dict[str, Any]:
+        from src.knowledge.flow_tracer import FlowTracer
+
+        return FlowTracer(self.graph_store).trace(from_ref)
+
+    def format_flow_markdown(self, from_ref: str) -> str:
+        from src.knowledge.flow_tracer import FlowTracer
+
+        tracer = FlowTracer(self.graph_store)
+        result = tracer.trace(from_ref)
+        return tracer.format_markdown(result)
+
+    def infer_trace_ref_from_query(self, query: str) -> str:
+        """Pick a likely route path from hybrid/backend context or keywords."""
+        q = (query or "").lower()
+        # Prefer identified routes later; here keyword heuristic
+        if "tender" in q or "مناقصه" in q:
+            return "/tenders/create"
+        routes = self.graph_store.list_nodes(NodeType.ROUTE, limit=50)
+        for r in routes:
+            path = (r.payload or {}).get("path") or ""
+            title = (r.title or "").lower()
+            if path and (path.lstrip("/").split("/")[0] in q or any(w in title for w in q.split() if len(w) > 3)):
+                return path
+        if routes:
+            return (routes[0].payload or {}).get("path") or routes[0].id
+        return "/"
+
+    def search_backend(self, query: str, limit: int = 15) -> List[Dict[str, Any]]:
+        """Search indexed API/service/entity/table nodes."""
+        store = self.graph_store
+        if not store.status().get("exists"):
+            return []
+        nodes = store.search_nodes(
+            query,
+            node_types=[
+                NodeType.API_ENDPOINT.value,
+                NodeType.SERVICE.value,
+                NodeType.ENTITY.value,
+                NodeType.TABLE.value,
+            ],
+            limit=limit,
+        )
+        # Also blend hybrid hits of backend types
+        hybrid = self.hybrid_search(query, limit=limit).get("hits") or []
+        results: List[Dict[str, Any]] = []
+        seen = set()
+        for n in nodes:
+            seen.add(n.id)
+            results.append(
+                {
+                    "id": n.id,
+                    "title": n.title,
+                    "node_type": n.node_type.value if hasattr(n.node_type, "value") else str(n.node_type),
+                    "file_path": n.file_path,
+                    "payload": n.payload or {},
+                    "from_index": True,
+                }
+            )
+        for h in hybrid:
+            if h.get("item_type") not in ("api", "service", "entity", "table"):
+                continue
+            hid = h.get("id") or ""
+            if hid in seen:
+                continue
+            seen.add(hid)
+            results.append(
+                {
+                    "id": hid,
+                    "title": h.get("title") or "",
+                    "node_type": h.get("item_type") or "",
+                    "file_path": h.get("file_path") or "",
+                    "payload": h.get("metadata") or {},
+                    "from_index": True,
+                    "score": h.get("score"),
+                }
+            )
+        return results[:limit]
+
+    @staticmethod
+    def _as_evidence(
+        *,
+        tool: str,
+        file_path: Optional[str],
+        symbol: Optional[str] = None,
+        id: Optional[str] = None,
+        evidence: Optional[str] = None,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Citation contract: drop items missing file_path + (symbol or id) + evidence."""
+        if not file_path:
+            return None
+        if not (symbol or id):
+            return None
+        if not evidence:
+            return None
+        item: Dict[str, Any] = {
+            "tool": tool,
+            "file_path": file_path.replace("\\", "/"),
+            "symbol": symbol or id,
+            "id": id or symbol,
+            "evidence": evidence,
+        }
+        if extra:
+            item.update(extra)
+        return item
+
+    def search_code(self, query: str, limit: int = 12) -> List[Dict[str, Any]]:
+        """Hybrid + lexical search returning cited snippets."""
+        evidence: List[Dict[str, Any]] = []
+        hybrid = self.hybrid_search(query, limit=limit).get("hits") or []
+        for h in hybrid:
+            fpath = h.get("file_path") or ""
+            title = h.get("title") or h.get("id") or ""
+            snippet = (h.get("content") or title or "")[:240]
+            ev = self._as_evidence(
+                tool="search_code",
+                file_path=fpath,
+                symbol=title,
+                id=h.get("id"),
+                evidence=snippet or title,
+                extra={"item_type": h.get("item_type"), "score": h.get("score")},
+            )
+            if ev:
+                evidence.append(ev)
+
+        if self.graph_store.status().get("exists"):
+            for n in self.graph_store.search_nodes(query, limit=limit):
+                fpath = n.file_path or ""
+                title = n.title or n.id
+                if any(e.get("id") == n.id for e in evidence):
+                    continue
+                ev = self._as_evidence(
+                    tool="search_code",
+                    file_path=fpath,
+                    symbol=title,
+                    id=n.id,
+                    evidence=title,
+                    extra={
+                        "item_type": n.node_type.value if hasattr(n.node_type, "value") else str(n.node_type),
+                    },
+                )
+                if ev:
+                    evidence.append(ev)
+        return evidence[:limit]
+
+    def get_route(self, query: str = "") -> List[Dict[str, Any]]:
+        """Cited ROUTE nodes from graph / hierarchy."""
+        evidence: List[Dict[str, Any]] = []
+        if query:
+            hier = self.get_route_hierarchy(query)
+            for r in hier.get("routes") or []:
+                fpath = r.get("file_path") or ""
+                path = r.get("path") or ""
+                title = r.get("title") or path
+                crumbs = r.get("breadcrumbs") or []
+                ev = self._as_evidence(
+                    tool="get_route",
+                    file_path=fpath or "src/routes.tsx",
+                    symbol=path or title,
+                    id=f"route:{path}" if path else None,
+                    evidence=f"route {path}; breadcrumbs={' > '.join(crumbs)}; title={title}",
+                    extra={"path": path, "breadcrumbs": crumbs, "title": title},
+                )
+                if ev:
+                    evidence.append(ev)
+
+        if self.graph_store.status().get("exists"):
+            nodes = self.graph_store.search_nodes(
+                query or "",
+                node_types=[NodeType.ROUTE.value],
+                limit=15,
+            ) if query else self.graph_store.list_nodes(NodeType.ROUTE, limit=30)
+            for n in nodes:
+                path = (n.payload or {}).get("path") or ""
+                if any(e.get("id") == n.id for e in evidence):
+                    continue
+                crumbs = list((n.payload or {}).get("breadcrumbs") or [])
+                ev = self._as_evidence(
+                    tool="get_route",
+                    file_path=n.file_path or "src/routes.tsx",
+                    symbol=path or n.title,
+                    id=n.id,
+                    evidence=f"route {path}; breadcrumbs={' > '.join(crumbs)}; title={n.title}",
+                    extra={"path": path, "breadcrumbs": crumbs, "title": n.title},
+                )
+                if ev:
+                    evidence.append(ev)
+        return evidence
+
+    def get_api(self, query: str = "", limit: int = 20) -> List[Dict[str, Any]]:
+        """Cited API endpoints from index."""
+        evidence: List[Dict[str, Any]] = []
+        for h in self.get_api_endpoints_from_index(query, limit=limit):
+            payload = h.get("payload") or {}
+            method = payload.get("method") or ""
+            path = payload.get("path") or h.get("title") or ""
+            fpath = h.get("file_path") or ""
+            ev = self._as_evidence(
+                tool="get_api",
+                file_path=fpath,
+                symbol=f"{method} {path}".strip(),
+                id=h.get("id"),
+                evidence=f"{method} {path} action={payload.get('action_name') or ''}".strip(),
+                extra={"method": method, "path": path, "payload": payload},
+            )
+            if ev:
+                evidence.append(ev)
+        return evidence
+
+    def get_entity(self, name_or_query: str) -> Optional[Dict[str, Any]]:
+        hits = self.search_backend(name_or_query, limit=10)
+        for h in hits:
+            if h.get("node_type") in ("entity", NodeType.ENTITY.value):
+                return h
+        # Direct id lookup
+        node = self.graph_store.get_node(f"entity:{name_or_query}")
+        if node:
+            return {
+                "id": node.id,
+                "title": node.title,
+                "node_type": NodeType.ENTITY.value,
+                "file_path": node.file_path,
+                "payload": node.payload or {},
+            }
+        return None
+
+    def get_entity_evidence(self, name_or_query: str) -> List[Dict[str, Any]]:
+        """Cited entity lookup (list form for tool_evidence)."""
+        evidence: List[Dict[str, Any]] = []
+        hit = self.get_entity(name_or_query)
+        candidates = [hit] if hit else []
+        if not candidates:
+            candidates = [
+                h for h in self.search_backend(name_or_query, limit=10)
+                if h.get("node_type") in ("entity", NodeType.ENTITY.value)
+            ]
+        for h in candidates:
+            if not h:
+                continue
+            payload = h.get("payload") or {}
+            fields = payload.get("fields") or []
+            if fields and isinstance(fields[0], dict):
+                field_bits = ", ".join(f.get("name", "") for f in fields[:20])
+            else:
+                field_bits = ", ".join(str(f) for f in fields[:20])
+            table = payload.get("table_name") or ""
+            title = h.get("title") or ""
+            ev = self._as_evidence(
+                tool="get_entity",
+                file_path=h.get("file_path"),
+                symbol=title,
+                id=h.get("id"),
+                evidence=f"entity {title} table={table} fields=[{field_bits}]",
+                extra={"payload": payload, "table_name": table},
+            )
+            if ev:
+                evidence.append(ev)
+        return evidence
+
+    def get_table(self, name_or_query: str = "", limit: int = 15) -> List[Dict[str, Any]]:
+        """Cited TABLE nodes from the knowledge graph."""
+        evidence: List[Dict[str, Any]] = []
+        store = self.graph_store
+        if not store.status().get("exists"):
+            return evidence
+        q = (name_or_query or "").strip()
+        nodes = (
+            store.search_nodes(q, node_types=[NodeType.TABLE.value], limit=limit)
+            if q
+            else store.list_nodes(NodeType.TABLE, limit=limit)
+        )
+        # Also try direct id
+        if q:
+            direct = store.get_node(f"table:{q}") or store.get_node(f"table:{q.lower()}")
+            if direct and direct.id not in {n.id for n in nodes}:
+                nodes = [direct, *nodes]
+        for n in nodes:
+            payload = n.payload or {}
+            cols = payload.get("columns") or []
+            if cols and isinstance(cols[0], dict):
+                cbits = ", ".join(c.get("name", "") for c in cols[:20])
+            else:
+                cbits = ", ".join(str(c) for c in cols[:20])
+            ev = self._as_evidence(
+                tool="get_table",
+                file_path=n.file_path or "(schema)",
+                symbol=n.title or n.id,
+                id=n.id,
+                evidence=f"table {n.title} columns=[{cbits}]",
+                extra={"payload": payload},
+            )
+            if ev:
+                evidence.append(ev)
+        return evidence
+
+    def get_api_endpoints_from_index(self, query: str = "", limit: int = 20) -> List[Dict[str, Any]]:
+        if query:
+            return [h for h in self.search_backend(query, limit=limit) if h.get("node_type") in ("api", NodeType.API_ENDPOINT.value)]
+        nodes = self.graph_store.list_nodes(NodeType.API_ENDPOINT, limit=limit)
+        return [
+            {
+                "id": n.id,
+                "title": n.title,
+                "node_type": NodeType.API_ENDPOINT.value,
+                "file_path": n.file_path,
+                "payload": n.payload or {},
+            }
+            for n in nodes
+        ]
+
+    def gather_tool_evidence(self, query: str, tools: List[str], trace_ref: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Run planned tools and return citation-ready evidence list."""
+        out: List[Dict[str, Any]] = []
+        toolset = set(tools or [])
+
+        if "search_code" in toolset:
+            out.extend(self.search_code(query))
+        if "get_route" in toolset:
+            out.extend(self.get_route(query))
+        if "get_api" in toolset:
+            out.extend(self.get_api(query))
+        if "get_entity" in toolset:
+            out.extend(self.get_entity_evidence(query))
+        if "get_table" in toolset:
+            # Prefer explicit table names from query tokens
+            out.extend(self.get_table(query))
+            if "tender" in query.lower() or "مناقصه" in query:
+                out.extend(self.get_table("Tenders"))
+        if "trace_flow" in toolset:
+            ref = trace_ref or self.infer_trace_ref_from_query(query)
+            trace = self.trace_flow(ref)
+            chains = trace.get("chains") or []
+            if not chains and (trace.get("steps") or trace.get("chain")):
+                chains = [{"steps": trace.get("steps") or trace.get("chain") or []}]
+            for chain in chains:
+                for step in chain.get("steps") or []:
+                    if not isinstance(step, dict):
+                        continue
+                    fpath = step.get("file_path") or ""
+                    symbol = step.get("title") or step.get("id") or step.get("label") or ""
+                    ev = self._as_evidence(
+                        tool="trace_flow",
+                        file_path=fpath or step.get("path") or "(graph)",
+                        symbol=symbol,
+                        id=step.get("id") or symbol,
+                        evidence=step.get("summary")
+                        or f"{step.get('node_type', '')} {symbol}".strip(),
+                        extra={"trace_ref": ref, "node_type": step.get("node_type")},
+                    )
+                    if ev:
+                        out.append(ev)
+
+        # Deduplicate by (tool, id, file_path)
+        seen = set()
+        unique: List[Dict[str, Any]] = []
+        for e in out:
+            key = (e.get("tool"), e.get("id"), e.get("file_path"))
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(e)
+        return unique
+
+    def format_backend_markdown(self, hits: List[Dict[str, Any]]) -> str:
+        """Build a cited Markdown section for backend hits."""
+        if not hits:
+            return ""
+        lines: List[str] = ["### دانش بک‌اند (استناد به سورس)", ""]
+        for h in hits[:12]:
+            ntype = h.get("node_type") or ""
+            title = h.get("title") or h.get("id") or ""
+            fpath = h.get("file_path") or ""
+            payload = h.get("payload") or {}
+            cite = f"`{fpath}`" if fpath else "(فایل نامشخص)"
+            if ntype in ("entity", NodeType.ENTITY.value):
+                fields = payload.get("fields") or []
+                if fields and isinstance(fields[0], dict):
+                    field_bits = ", ".join(
+                        f"{f.get('name')} ({f.get('clr_type')})" for f in fields[:20]
+                    )
+                else:
+                    field_bits = ", ".join(str(f) for f in fields[:20])
+                table = payload.get("table_name") or ""
+                lines.append(f"- **Entity `{title}`** → جدول `{table}` — فایل: {cite}")
+                if field_bits:
+                    lines.append(f"  - فیلدها: {field_bits}")
+            elif ntype in ("service", NodeType.SERVICE.value):
+                methods = payload.get("methods") or []
+                if methods and isinstance(methods[0], dict):
+                    mnames = ", ".join(m.get("name", "") for m in methods[:15])
+                else:
+                    mnames = ", ".join(str(m) for m in (payload.get("methods") or [])[:15])
+                lines.append(f"- **Service `{title}`** — فایل: {cite}")
+                if mnames:
+                    lines.append(f"  - متدها: {mnames}")
+            elif ntype in ("api", NodeType.API_ENDPOINT.value):
+                method = payload.get("method") or ""
+                path = payload.get("path") or title
+                action = payload.get("action_name") or ""
+                roles = payload.get("roles") or []
+                lines.append(
+                    f"- **API `{method} {path}`**"
+                    + (f" ({action})" if action else "")
+                    + f" — فایل: {cite}"
+                )
+                if roles:
+                    lines.append(f"  - Roles: {', '.join(roles)}")
+            elif ntype in ("table", NodeType.TABLE.value):
+                cols = payload.get("columns") or []
+                if cols and isinstance(cols[0], dict):
+                    cbits = ", ".join(f"{c.get('name')}:{c.get('sql_type')}" for c in cols[:20])
+                else:
+                    cbits = ", ".join(str(c) for c in cols[:20])
+                lines.append(f"- **Table `{title}`** — فایل: {cite}")
+                if cbits:
+                    lines.append(f"  - ستون‌ها: {cbits}")
+            else:
+                lines.append(f"- **{ntype} `{title}`** — فایل: {cite}")
+        return "\n".join(lines)
+
+    def hybrid_search(self, query: str, limit: int = 8) -> Dict[str, Any]:
+        """Search indexed routes/components; returns serializable hits."""
+        hits = self.hybrid_indexer.search(query, limit=limit)
+        return {
+            "query": query,
+            "use_vector": bool(self.hybrid_indexer.use_vector),
+            "hits": [dump_model(h) for h in hits],
+        }
+
+    def routes_from_hybrid_hits(self, hits: List[Dict[str, Any]]) -> List[RouteNode]:
+        """Map hybrid search hits back to RouteNode objects from the route tree."""
+        tree = self.get_route_tree()
+        path_map = {r.path: r for r in tree.routes if r.path}
+        file_map: Dict[str, RouteNode] = {}
+        for r in tree.routes:
+            if r.file_path:
+                file_map[r.file_path.replace("\\", "/")] = r
+
+        found: List[RouteNode] = []
+        seen_paths = set()
+        for hit in hits:
+            meta = hit.get("metadata") or {}
+            path = meta.get("path") or ""
+            file_path = (hit.get("file_path") or "").replace("\\", "/")
+            route: Optional[RouteNode] = None
+            if path and path in path_map:
+                route = path_map[path]
+            elif file_path and file_path in file_map:
+                route = file_map[file_path]
+            if route and route.path not in seen_paths:
+                seen_paths.add(route.path)
+                found.append(route)
+        return found
 
 
 _default_toolbox = Code2GuideToolbox()
+
 
 @tool
 def search_persian_labels(query: str, workspace_path: Optional[str] = None) -> Dict[str, Any]:
     """Searches localized Persian strings, buttons, and placeholders in the codebase."""
     tb = Code2GuideToolbox(workspace_path) if workspace_path else _default_toolbox
     return tb.search_persian_labels(query)
+
 
 @tool
 def inspect_component(
@@ -150,6 +969,7 @@ def inspect_component(
     """Reads and parses a JSX/TSX/Vue UI component into forms, fields, and buttons."""
     tb = Code2GuideToolbox(workspace_path) if workspace_path else _default_toolbox
     return tb.inspect_component(file_path, start_line, end_line)
+
 
 @tool
 def get_route_hierarchy(component_name: str, workspace_path: Optional[str] = None) -> Dict[str, Any]:

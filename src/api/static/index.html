@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Code2Guide — نمایش راهنما</title>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <style>
+    :root {
+      --bg: #f6f3ee;
+      --panel: #fffdf9;
+      --ink: #1c1917;
+      --muted: #57534e;
+      --accent: #0f766e;
+      --accent-soft: #ccfbf1;
+      --border: #e7e5e4;
+      --danger: #b91c1c;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Vazirmatn", "Tahoma", "Segoe UI", sans-serif;
+      background:
+        radial-gradient(1200px 500px at 100% -10%, #d1fae5 0%, transparent 55%),
+        radial-gradient(900px 400px at 0% 0%, #fde68a55 0%, transparent 50%),
+        var(--bg);
+      color: var(--ink);
+      min-height: 100vh;
+    }
+    .wrap {
+      max-width: 880px;
+      margin: 0 auto;
+      padding: 2rem 1.25rem 4rem;
+    }
+    h1 {
+      font-size: 1.75rem;
+      margin: 0 0 0.35rem;
+      letter-spacing: -0.02em;
+    }
+    .sub {
+      color: var(--muted);
+      margin: 0 0 1.5rem;
+      line-height: 1.7;
+    }
+    form {
+      display: grid;
+      gap: 0.75rem;
+      margin-bottom: 1.5rem;
+    }
+    label {
+      font-size: 0.9rem;
+      color: var(--muted);
+    }
+    input, textarea {
+      width: 100%;
+      border: 1px solid var(--border);
+      background: var(--panel);
+      border-radius: 10px;
+      padding: 0.85rem 1rem;
+      font: inherit;
+      color: var(--ink);
+    }
+    textarea { min-height: 88px; resize: vertical; }
+    button {
+      justify-self: start;
+      border: 0;
+      background: var(--accent);
+      color: white;
+      font: inherit;
+      font-weight: 600;
+      padding: 0.8rem 1.4rem;
+      border-radius: 999px;
+      cursor: pointer;
+    }
+    button:disabled {
+      opacity: 0.55;
+      cursor: wait;
+    }
+    .status {
+      min-height: 1.5rem;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+    .status.error { color: var(--danger); }
+    .guide {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 1.5rem 1.35rem;
+      line-height: 1.9;
+      box-shadow: 0 12px 40px rgba(28, 25, 23, 0.05);
+    }
+    .guide:empty { display: none; }
+    .guide h1, .guide h2, .guide h3, .guide h4 {
+      margin: 1.4rem 0 0.6rem;
+      line-height: 1.4;
+    }
+    .guide h3 { color: var(--accent); }
+    .guide p, .guide ul, .guide ol, .guide blockquote {
+      margin: 0.55rem 0;
+    }
+    .guide ul, .guide ol { padding-inline-start: 1.4rem; }
+    .guide code {
+      background: var(--accent-soft);
+      padding: 0.1rem 0.35rem;
+      border-radius: 6px;
+      font-size: 0.92em;
+      direction: ltr;
+      unicode-bidi: isolate;
+    }
+    .guide blockquote {
+      border-inline-start: 3px solid var(--accent);
+      padding-inline-start: 0.9rem;
+      color: var(--muted);
+      margin-inline: 0;
+    }
+    .guide hr {
+      border: 0;
+      border-top: 1px solid var(--border);
+      margin: 1.4rem 0;
+    }
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin: 0 0 1rem;
+    }
+    .chip {
+      background: var(--accent-soft);
+      color: #115e59;
+      border-radius: 999px;
+      padding: 0.25rem 0.7rem;
+      font-size: 0.8rem;
+    }
+  </style>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;600;700&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <div class="wrap">
+    <h1>Code2Guide</h1>
+    <p class="sub">پرسش خود را بپرسید؛ راهنمای گام‌به‌گام به‌صورت Markdown با جهت راست‌به‌چپ نمایش داده می‌شود.</p>
+
+    <form id="ask-form">
+      <div>
+        <label for="query">پرسش</label>
+        <textarea id="query" name="query" required placeholder="مثلاً: چگونه یک مناقصه جدید ثبت کنم؟"></textarea>
+      </div>
+      <div>
+        <label for="workspace">مسیر workspace (اختیاری)</label>
+        <input id="workspace" name="workspace" placeholder="خالی = مقدار پیش‌فرض سرور" />
+      </div>
+      <button type="submit" id="submit-btn">تولید راهنما</button>
+    </form>
+
+    <div class="status" id="status"></div>
+    <div class="meta" id="meta"></div>
+    <article class="guide" id="guide" aria-live="polite"></article>
+  </div>
+
+  <script>
+    /** Convert literal \\n sequences into real newlines for Markdown parsers. */
+    function normalizeGuideMarkdown(text) {
+      if (!text) return "";
+      let guide = String(text).trim();
+      const realNewlines = (guide.match(/\n/g) || []).length;
+      if (guide.includes("\\n") && realNewlines <= 1) {
+        guide = guide
+          .replace(/\\r\\n/g, "\n")
+          .replace(/\\n/g, "\n")
+          .replace(/\\t/g, "\t")
+          .replace(/\\r/g, "");
+      }
+      return guide.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim() + "\n";
+    }
+
+    marked.setOptions({ breaks: true, gfm: true });
+
+    const form = document.getElementById("ask-form");
+    const statusEl = document.getElementById("status");
+    const guideEl = document.getElementById("guide");
+    const metaEl = document.getElementById("meta");
+    const submitBtn = document.getElementById("submit-btn");
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const query = document.getElementById("query").value.trim();
+      const workspace = document.getElementById("workspace").value.trim();
+
+      statusEl.className = "status";
+      statusEl.textContent = "در حال تولید راهنما…";
+      guideEl.innerHTML = "";
+      metaEl.innerHTML = "";
+      submitBtn.disabled = true;
+
+      const body = { query };
+      if (workspace) body.workspace_path = workspace;
+
+      try {
+        const res = await fetch("/api/v1/ask", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.detail || `HTTP ${res.status}`);
+        }
+        const data = await res.json();
+        const md = normalizeGuideMarkdown(data.guide);
+        guideEl.innerHTML = marked.parse(md);
+        metaEl.innerHTML = [
+          data.routes_found != null ? `<span class="chip">مسیرها: ${data.routes_found}</span>` : "",
+          data.forms_found != null ? `<span class="chip">فرم‌ها: ${data.forms_found}</span>` : "",
+          Array.isArray(data.breadcrumbs) && data.breadcrumbs.length
+            ? `<span class="chip">${data.breadcrumbs.join(" › ")}</span>`
+            : "",
+        ].join("");
+        statusEl.textContent = "آماده";
+      } catch (err) {
+        statusEl.className = "status error";
+        statusEl.textContent = "خطا: " + (err.message || err);
+      } finally {
+        submitBtn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

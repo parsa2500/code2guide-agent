@@ -1,0 +1,11 @@
+{
+    "schema_version": 2,
+    "commit": "52966ee9aab21a9c056ca117d05d79e3bd138201",
+    "indexed_at": "2026-09-16T12:15:51Z",
+    "project": "code2guide-agent",
+    "nodes": 197,
+    "edges": 895,
+    "original_size": 1900544,
+    "compressed_size": 281006,
+    "compression_level": 9
+}

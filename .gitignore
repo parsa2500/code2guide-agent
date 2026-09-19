@@ -51,6 +51,7 @@ coverage.xml
 # Vector DB & Cache directories
 .qdrant/
 qdrant_storage/
+.code2guide/
 fastembed_cache/
 workspace_logs/
 *.log

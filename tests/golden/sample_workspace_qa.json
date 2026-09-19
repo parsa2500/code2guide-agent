@@ -1,0 +1,59 @@
+[
+  {
+    "id": "ux_register_tender",
+    "query": "چگونه مناقصه ثبت کنم؟",
+    "intent": "ux",
+    "must_contain": ["مدیریت مناقصات", "ثبت مناقصه جدید", "عنوان مناقصه", "/tenders/create"],
+    "must_cite_substr": ["src/pages/Tenders/Create.tsx"]
+  },
+  {
+    "id": "api_post_tenders",
+    "query": "POST /api/Tenders",
+    "intent": "api",
+    "must_contain": ["POST", "/api/Tenders"],
+    "must_cite_substr": ["backend/Controllers/TendersController.cs"]
+  },
+  {
+    "id": "entity_tender_fields",
+    "query": "فیلدهای entity Tender چیست؟",
+    "intent": "data",
+    "must_contain": ["Tender", "Title", "Description"],
+    "must_cite_substr": ["backend/Entities/Tender.cs"]
+  },
+  {
+    "id": "table_tenders",
+    "query": "جدول Tenders چه ستون‌هایی دارد؟",
+    "intent": "data",
+    "must_contain": ["Tenders", "Title"],
+    "must_cite_substr": ["CreateTenders.cs"]
+  },
+  {
+    "id": "flow_ui_to_db",
+    "query": "جریان از UI تا دیتابیس برای مناقصه",
+    "intent": "flow",
+    "must_contain": ["POST /api/Tenders", "TenderService", "Tender", "Tenders"],
+    "must_cite_substr": ["TendersController.cs", "TenderService.cs", "Tender.cs"]
+  },
+  {
+    "id": "api_roles",
+    "query": "API مناقصه چه نقش‌هایی لازم دارد؟",
+    "intent": "api",
+    "must_contain": ["Admin", "TenderManager"],
+    "must_cite_substr": ["TendersController.cs"]
+  },
+  {
+    "id": "service_create",
+    "query": "کدام سرویس create مناقصه را انجام می‌دهد؟",
+    "intent": "api",
+    "must_contain": ["TenderService"],
+    "must_cite_substr": ["TenderService.cs"]
+  },
+  {
+    "id": "negative_unrelated",
+    "query": "قیمت بیت‌کوین امروز چقدر است؟",
+    "intent": "unknown",
+    "must_contain": ["یافت نشد"],
+    "must_cite_substr": [],
+    "must_not_contain": ["عنوان مناقصه", "/tenders/create"]
+  }
+]

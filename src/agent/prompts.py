@@ -34,7 +34,7 @@ UX_GUIDE_TEMPLATE = """## راهنمای گام‌به‌گام کاربری: {t
 
 ### ۱. مسیر دسترسی (Navigation)
 {navigation_steps}
-
+{rbac_notes}
 **آدرس صفحه در سامانه:** `{page_url}`
 
 ---
