@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List, Set
 
 from src.core.config import settings
+from src.core.markdown_guide import normalize_guide_markdown
 from src.core.normalizer import default_normalizer
 from src.parsers.ast_visitor import DiscoveredForm, ComponentInspection
 from src.parsers.route_extractor import RouteNode
@@ -315,7 +316,7 @@ class Code2GuideWorkflow:
                     rbac_notes=rbac_notes,
                 )
                 if llm_output and "مسیر دسترسی" in llm_output:
-                    state.final_persian_guide = llm_output
+                    state.final_persian_guide = normalize_guide_markdown(llm_output)
                     state.status = "completed"
                     state.steps_taken.append(
                         f"Synthesized intelligent Persian guide using LLM ({model_name})"
@@ -335,7 +336,7 @@ class Code2GuideWorkflow:
             action_description=action_section
         )
 
-        state.final_persian_guide = guide
+        state.final_persian_guide = normalize_guide_markdown(guide)
         state.status = "completed"
         state.steps_taken.append("Synthesized structured Persian guide via template engine")
         return dump_model(state)

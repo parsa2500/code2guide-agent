@@ -2,9 +2,11 @@
 
 from typing import Optional, List, Dict, Any
 from fastapi import APIRouter, HTTPException, status
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
 from src.core.config import settings
+from src.core.markdown_guide import normalize_guide_markdown
 from src.agent.workflow import Code2GuideAgent
 from src.agent.tools import Code2GuideToolbox, dump_model
 
@@ -48,13 +50,44 @@ def ask_codebase(payload: AskRequest):
         agent = Code2GuideAgent(workspace_path=target_ws)
         state = agent.ask(query=payload.query, workspace_path=target_ws)
 
+        guide = normalize_guide_markdown(
+            state.final_persian_guide or "راهنمایی یافت نشد."
+        )
         return AskResponse(
             query=state.query,
-            guide=state.final_persian_guide or "راهنمایی یافت نشد.",
+            guide=guide,
             breadcrumbs=state.extracted_breadcrumbs,
             routes_found=len(state.identified_routes),
             forms_found=len(state.discovered_forms),
             steps_taken=state.steps_taken
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error executing Code2Guide agent: {str(e)}"
+        )
+
+
+@router.post(
+    "/ask.md",
+    response_class=PlainTextResponse,
+    summary="Generate Persian UX Guide as downloadable Markdown",
+)
+def ask_codebase_markdown(payload: AskRequest):
+    """Same as /ask, but returns raw Markdown with correct newlines for MD viewers."""
+    target_ws = payload.workspace_path or settings.target_workspace_path
+    try:
+        agent = Code2GuideAgent(workspace_path=target_ws)
+        state = agent.ask(query=payload.query, workspace_path=target_ws)
+        guide = normalize_guide_markdown(
+            state.final_persian_guide or "راهنمایی یافت نشد."
+        )
+        return PlainTextResponse(
+            content=guide,
+            media_type="text/markdown; charset=utf-8",
+            headers={
+                "Content-Disposition": 'inline; filename="code2guide.md"',
+            },
         )
     except Exception as e:
         raise HTTPException(
