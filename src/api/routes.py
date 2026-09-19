@@ -39,6 +39,8 @@ class ScanWorkspaceResponse(BaseModel):
     workspace_path: str
     total_routes: int
     routes: List[Dict[str, Any]]
+    indexed_count: int = 0
+    use_vector: bool = False
     message: str
 
 
@@ -104,12 +106,19 @@ def scan_workspace(payload: ScanWorkspaceRequest):
         toolbox = Code2GuideToolbox(workspace_path=target_ws)
         route_tree = toolbox.get_route_tree()
         routes_data = [dump_model(r) for r in route_tree.routes]
+        index_info = toolbox.index_workspace()
 
         return ScanWorkspaceResponse(
             workspace_path=target_ws,
             total_routes=len(route_tree.routes),
             routes=routes_data,
-            message=f"Workspace scanned successfully: {len(route_tree.routes)} routes discovered."
+            indexed_count=index_info.get("indexed_count", 0),
+            use_vector=bool(index_info.get("use_vector")),
+            message=(
+                f"Workspace scanned successfully: {len(route_tree.routes)} routes discovered, "
+                f"{index_info.get('indexed_count', 0)} indexed "
+                f"(use_vector={index_info.get('use_vector')})."
+            ),
         )
     except Exception as e:
         raise HTTPException(

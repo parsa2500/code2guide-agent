@@ -25,6 +25,7 @@ class AgentState(BaseModel):
     required_roles: List[str] = Field(default_factory=list, description="Permission/role strings required for the operation")
     validation_notes: List[str] = Field(default_factory=list, description="Human-readable validation constraints")
     api_endpoints: List[EndpointRequirement] = Field(default_factory=list, description="Related OpenAPI endpoints")
+    hybrid_hits: List[Dict[str, Any]] = Field(default_factory=list, description="Hybrid search hits for route/file discovery")
 
     # Tracking & Messaging
     messages: List[Dict[str, Any]] = Field(default_factory=list, description="Interaction history")

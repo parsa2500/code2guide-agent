@@ -143,6 +143,8 @@ class TestGeminiAdaptedParsers(unittest.TestCase):
             self.assertIn("admin.knowledge.view", roles)
 
     def test_synthesize_guide_includes_rbac_note(self):
+        from unittest.mock import patch
+
         wf = Code2GuideWorkflow(workspace_path=".")
         state = AgentState(
             query="چگونه شرکت‌ها را ببینم؟",
@@ -152,7 +154,15 @@ class TestGeminiAdaptedParsers(unittest.TestCase):
             discovered_forms=[],
             identified_routes=[],
         )
-        out = wf.node_synthesize_guide(state)
+        # Force template path so RBAC note assertion is deterministic (no live LLM).
+        with patch.object(wf, "_call_real_llm", return_value=None), patch(
+            "src.agent.workflow.settings.openrouter_api_key", None
+        ), patch("src.agent.workflow.settings.openai_api_key", None), patch.dict(
+            "os.environ",
+            {"OPENROUTER_API_KEY": "", "OPENAI_API_KEY": ""},
+            clear=False,
+        ):
+            out = wf.node_synthesize_guide(state)
         guide = out.get("final_persian_guide") or ""
         self.assertIn("RBAC", guide)
         self.assertIn("admin.companies.view", guide)

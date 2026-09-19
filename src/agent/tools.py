@@ -10,8 +10,13 @@ from typing import List, Dict, Any, Optional
 from src.core.config import settings
 from src.core.normalizer import default_normalizer
 from src.search.lexical_engine import RipgrepLexicalEngine
+from src.search.hybrid_indexer import (
+    HybridIndexer,
+    IndexedItem,
+    collection_name_for_workspace,
+)
 from src.parsers.ast_visitor import JSXASTVisitor, UIField, DiscoveredForm
-from src.parsers.route_extractor import RouteExtractor, RouteTree
+from src.parsers.route_extractor import RouteExtractor, RouteTree, RouteNode
 from src.parsers.alias_resolver import PathAliasResolver
 from src.parsers.i18n_parser import I18nParser
 from src.parsers.validation_parser import ValidationParser, ValidationRule
@@ -34,7 +39,11 @@ def dump_model(obj: Any) -> Dict[str, Any]:
 class Code2GuideToolbox:
     """Toolbox encapsulating workspace state and execution helpers."""
 
-    def __init__(self, workspace_path: Optional[str] = None):
+    def __init__(
+        self,
+        workspace_path: Optional[str] = None,
+        hybrid_indexer: Optional[HybridIndexer] = None,
+    ):
         self.workspace_path = workspace_path or settings.target_workspace_path
         self.normalizer = default_normalizer
         self.lexical_engine = RipgrepLexicalEngine(self.workspace_path, normalizer=self.normalizer)
@@ -44,6 +53,10 @@ class Code2GuideToolbox:
         self.i18n_parser = I18nParser(self.workspace_path)
         self.contract_extractor = BackendContractExtractor(self.workspace_path)
         self._cached_route_tree: Optional[RouteTree] = None
+        self._indexed = False
+        self.hybrid_indexer = hybrid_indexer or HybridIndexer(
+            collection_name=collection_name_for_workspace(self.workspace_path),
+        )
 
     def get_route_tree(self) -> RouteTree:
         """Caches and returns the workspace route tree (enriched with pageLabels when missing)."""
@@ -240,6 +253,96 @@ class Code2GuideToolbox:
                 scored.append((score, ep))
         scored.sort(key=lambda x: x[0], reverse=True)
         return [ep for _, ep in scored[:limit]]
+
+    def build_index_items(self) -> List[IndexedItem]:
+        """Build IndexedItem documents from the scanned route tree."""
+        tree = self.get_route_tree()
+        items: List[IndexedItem] = []
+        for route in tree.routes:
+            title = route.title or (route.breadcrumbs[-1] if route.breadcrumbs else route.path)
+            crumbs = " > ".join(route.breadcrumbs) if route.breadcrumbs else ""
+            content_parts = [
+                crumbs,
+                route.path or "",
+                route.component_name or "",
+                route.title or "",
+            ]
+            items.append(
+                IndexedItem(
+                    id=f"route:{route.path}",
+                    title=title or route.path,
+                    content=" ".join(p for p in content_parts if p).strip(),
+                    file_path=route.file_path or "",
+                    item_type="route",
+                    metadata={
+                        "path": route.path,
+                        "component_name": route.component_name,
+                        "breadcrumbs": list(route.breadcrumbs or []),
+                        "title": route.title,
+                    },
+                )
+            )
+        return items
+
+    def index_workspace(self) -> Dict[str, Any]:
+        """Full reindex of route documents into hybrid search."""
+        items = self.build_index_items()
+        self.hybrid_indexer.index_items(items, rebuild=True)
+        self._indexed = True
+        return {
+            "indexed_count": len(items),
+            "use_vector": bool(self.hybrid_indexer.use_vector),
+            "collection_name": self.hybrid_indexer.collection_name,
+            "workspace_path": self.workspace_path,
+        }
+
+    def ensure_indexed(self) -> Dict[str, Any]:
+        """Lazy-index on first ask when scan-workspace was not called yet."""
+        if self._indexed and self.hybrid_indexer._fallback_indexer.items:
+            return {
+                "indexed_count": len(self.hybrid_indexer._fallback_indexer.items),
+                "use_vector": bool(self.hybrid_indexer.use_vector),
+                "collection_name": self.hybrid_indexer.collection_name,
+                "workspace_path": self.workspace_path,
+                "lazy": False,
+            }
+        result = self.index_workspace()
+        result["lazy"] = True
+        return result
+
+    def hybrid_search(self, query: str, limit: int = 8) -> Dict[str, Any]:
+        """Search indexed routes/components; returns serializable hits."""
+        hits = self.hybrid_indexer.search(query, limit=limit)
+        return {
+            "query": query,
+            "use_vector": bool(self.hybrid_indexer.use_vector),
+            "hits": [dump_model(h) for h in hits],
+        }
+
+    def routes_from_hybrid_hits(self, hits: List[Dict[str, Any]]) -> List[RouteNode]:
+        """Map hybrid search hits back to RouteNode objects from the route tree."""
+        tree = self.get_route_tree()
+        path_map = {r.path: r for r in tree.routes if r.path}
+        file_map: Dict[str, RouteNode] = {}
+        for r in tree.routes:
+            if r.file_path:
+                file_map[r.file_path.replace("\\", "/")] = r
+
+        found: List[RouteNode] = []
+        seen_paths = set()
+        for hit in hits:
+            meta = hit.get("metadata") or {}
+            path = meta.get("path") or ""
+            file_path = (hit.get("file_path") or "").replace("\\", "/")
+            route: Optional[RouteNode] = None
+            if path and path in path_map:
+                route = path_map[path]
+            elif file_path and file_path in file_map:
+                route = file_map[file_path]
+            if route and route.path not in seen_paths:
+                seen_paths.add(route.path)
+                found.append(route)
+        return found
 
 
 _default_toolbox = Code2GuideToolbox()

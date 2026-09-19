@@ -26,9 +26,13 @@ except ImportError:
 class Code2GuideWorkflow:
     """Manages LangGraph StateGraph nodes, edges, and ReAct discovery cycle."""
 
-    def __init__(self, workspace_path: Optional[str] = None):
+    def __init__(
+        self,
+        workspace_path: Optional[str] = None,
+        toolbox: Optional[Code2GuideToolbox] = None,
+    ):
         self.workspace_path = workspace_path or settings.target_workspace_path
-        self.toolbox = Code2GuideToolbox(self.workspace_path)
+        self.toolbox = toolbox or Code2GuideToolbox(self.workspace_path)
         self.normalizer = default_normalizer
         self.compiled_graph = self._build_graph()
 
@@ -59,6 +63,8 @@ class Code2GuideWorkflow:
         keywords = self.normalizer.extract_keywords(query)
         state.normalized_query = " ".join(keywords)
 
+        index_info = self.toolbox.ensure_indexed()
+
         route_res = self.toolbox.get_route_hierarchy(cleaned_query)
         matching_routes = [RouteNode(**r) for r in route_res.get("routes", [])]
 
@@ -70,9 +76,21 @@ class Code2GuideWorkflow:
                     if not any(x.path == r_node.path for x in matching_routes):
                         matching_routes.append(r_node)
 
+        hybrid_res = self.toolbox.hybrid_search(query, limit=8)
+        hybrid_hits = hybrid_res.get("hits", [])
+        state.hybrid_hits = hybrid_hits
+        for r_node in self.toolbox.routes_from_hybrid_hits(hybrid_hits):
+            if not any(x.path == r_node.path for x in matching_routes):
+                matching_routes.append(r_node)
+
         best_crumbs = route_res.get("best_breadcrumbs", [])
         if not best_crumbs and matching_routes:
             best_crumbs = matching_routes[0].breadcrumbs
+        if not best_crumbs and hybrid_hits:
+            meta = hybrid_hits[0].get("metadata") or {}
+            crumbs = meta.get("breadcrumbs") or []
+            if crumbs:
+                best_crumbs = list(crumbs)
 
         state.identified_routes = matching_routes
         state.extracted_breadcrumbs = best_crumbs
@@ -90,6 +108,8 @@ class Code2GuideWorkflow:
         state.steps_taken.append(
             f"Discovered {len(matching_routes)} candidate routes"
             + (f", roles={state.required_roles}" if state.required_roles else "")
+            + f"; Hybrid hits={len(hybrid_hits)} use_vector={hybrid_res.get('use_vector')} "
+            + f"indexed={index_info.get('indexed_count')}"
         )
         return dump_model(state)
 
@@ -112,6 +132,23 @@ class Code2GuideWorkflow:
                 if k not in seen_lines:
                     seen_lines.add(k)
                     all_matches.append(m)
+
+        # Synthetic lexical-like matches from hybrid file hits so inspect sees them
+        for hit in state.hybrid_hits:
+            fpath = hit.get("file_path") or ""
+            if fpath.endswith((".tsx", ".jsx", ".vue")):
+                k = (fpath, 0)
+                if k not in seen_lines:
+                    seen_lines.add(k)
+                    all_matches.append(
+                        {
+                            "file_path": fpath,
+                            "line_number": 0,
+                            "line_content": hit.get("title") or "",
+                            "context_before": [],
+                            "context_after": [],
+                        }
+                    )
 
         target_files = {m["file_path"] for m in all_matches if m["file_path"].endswith((".tsx", ".jsx", ".vue"))}
         state.steps_taken.append(f"Found {len(all_matches)} lexical matches across {len(target_files)} UI files")
@@ -147,6 +184,11 @@ class Code2GuideWorkflow:
                     except Exception:
                         pass
                 target_files.add(r.file_path)
+
+        for hit in state.hybrid_hits:
+            fpath = (hit.get("file_path") or "").replace("\\", "/")
+            if fpath.endswith((".tsx", ".jsx", ".vue")):
+                target_files.add(fpath)
 
         keywords = self.normalizer.extract_keywords(state.query)
         for kw in keywords:
@@ -450,8 +492,12 @@ class Code2GuideWorkflow:
 class Code2GuideAgent:
     """Public wrapper for Code2Guide Agent."""
 
-    def __init__(self, workspace_path: Optional[str] = None):
-        self.workflow = Code2GuideWorkflow(workspace_path)
+    def __init__(
+        self,
+        workspace_path: Optional[str] = None,
+        toolbox: Optional[Code2GuideToolbox] = None,
+    ):
+        self.workflow = Code2GuideWorkflow(workspace_path, toolbox=toolbox)
 
     def ask(self, query: str, workspace_path: Optional[str] = None) -> AgentState:
         return self.workflow.run(query=query, workspace_path=workspace_path)

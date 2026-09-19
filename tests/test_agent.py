@@ -1,11 +1,30 @@
 """Tests for Search Engine, ReAct Toolbox, and Code2Guide Agent."""
 
+import os
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from src.search.hybrid_indexer import HybridIndexer, IndexedItem
+from src.search.hybrid_indexer import HybridIndexer, IndexedItem, collection_name_for_workspace
 from src.agent.tools import Code2GuideToolbox
 from src.agent.workflow import Code2GuideAgent
+
+
+def _offline_indexer(workspace_path: str) -> HybridIndexer:
+    return HybridIndexer(
+        collection_name=collection_name_for_workspace(workspace_path),
+        url=None,
+        location=":memory:",
+        embedding_provider="none",
+    )
+
+
+def _offline_agent(ws_path: str) -> Code2GuideAgent:
+    toolbox = Code2GuideToolbox(
+        workspace_path=ws_path,
+        hybrid_indexer=_offline_indexer(ws_path),
+    )
+    return Code2GuideAgent(workspace_path=ws_path, toolbox=toolbox)
 
 
 class TestAgent(unittest.TestCase):
@@ -38,10 +57,52 @@ class TestAgent(unittest.TestCase):
         self.assertGreater(len(hits), 0)
         self.assertEqual(hits[0].id, "route-1")
 
+    def test_collection_name_scoped_to_workspace(self):
+        a = collection_name_for_workspace("/tmp/ws-a")
+        b = collection_name_for_workspace("/tmp/ws-b")
+        self.assertNotEqual(a, b)
+        self.assertTrue(a.startswith("code2guide_"))
+
+    def test_toolbox_index_and_hybrid_search(self):
+        ws_path = str(Path("./sample_workspace").resolve())
+        toolbox = Code2GuideToolbox(
+            workspace_path=ws_path,
+            hybrid_indexer=_offline_indexer(ws_path),
+        )
+        info = toolbox.index_workspace()
+        self.assertGreater(info["indexed_count"], 0)
+        self.assertFalse(info["use_vector"])
+
+        hits = toolbox.hybrid_search("ثبت مناقصه جدید", limit=5)["hits"]
+        self.assertGreater(len(hits), 0)
+        paths = [h.get("metadata", {}).get("path") for h in hits]
+        self.assertIn("/tenders/create", paths)
+
+        routes = toolbox.routes_from_hybrid_hits(hits)
+        self.assertTrue(any(r.path == "/tenders/create" for r in routes))
+
+    def test_ensure_indexed_feeds_discover(self):
+        ws_path = str(Path("./sample_workspace").resolve())
+        agent = _offline_agent(ws_path)
+        with patch.object(agent.workflow, "_call_real_llm", return_value=None), patch.dict(
+            os.environ, {"OPENROUTER_API_KEY": "", "OPENAI_API_KEY": ""}, clear=False
+        ), patch("src.agent.workflow.settings.openrouter_api_key", None), patch(
+            "src.agent.workflow.settings.openai_api_key", None
+        ):
+            state = agent.ask("چگونه مناقصه ثبت کنم؟", workspace_path=ws_path)
+        self.assertEqual(state.status, "completed")
+        self.assertTrue(any("Hybrid hits=" in s for s in state.steps_taken))
+        self.assertGreater(len(state.identified_routes), 0)
+
     def test_agent_end_to_end_on_sample_workspace(self):
-        ws_path = "./sample_workspace"
-        agent = Code2GuideAgent(workspace_path=ws_path)
-        state = agent.ask("چگونه یک مناقصه جدید ثبت کنم؟", workspace_path=ws_path)
+        ws_path = str(Path("./sample_workspace").resolve())
+        agent = _offline_agent(ws_path)
+        with patch.object(agent.workflow, "_call_real_llm", return_value=None), patch.dict(
+            os.environ, {"OPENROUTER_API_KEY": "", "OPENAI_API_KEY": ""}, clear=False
+        ), patch("src.agent.workflow.settings.openrouter_api_key", None), patch(
+            "src.agent.workflow.settings.openai_api_key", None
+        ):
+            state = agent.ask("چگونه یک مناقصه جدید ثبت کنم؟", workspace_path=ws_path)
 
         self.assertEqual(state.status, "completed")
         self.assertGreater(len(state.extracted_breadcrumbs), 0)

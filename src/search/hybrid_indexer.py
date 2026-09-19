@@ -7,10 +7,12 @@ are still being provisioned.
 
 from __future__ import annotations
 
+import hashlib
 import math
 import re
 import urllib.request
 import json
+from pathlib import Path
 from typing import List, Dict, Any, Optional, Protocol
 from pydantic import BaseModel, Field
 
@@ -29,6 +31,14 @@ try:
     _has_fastembed = True
 except ImportError:
     _has_fastembed = False
+
+
+def collection_name_for_workspace(workspace_path: str, prefix: str = "code2guide") -> str:
+    """Stable Qdrant collection name scoped to an absolute workspace path."""
+    resolved = str(Path(workspace_path).resolve())
+    digest = hashlib.sha1(resolved.encode("utf-8")).hexdigest()[:12]
+    safe_prefix = re.sub(r"[^a-zA-Z0-9_]", "_", prefix)[:32]
+    return f"{safe_prefix}_{digest}"
 
 
 class IndexedItem(BaseModel):
@@ -238,6 +248,9 @@ class HybridIndexer:
         self._qdrant_client = None
         self._embedder: Optional[Embedder] = None
 
+        if self.embedding_provider in ("none", "off", "disabled"):
+            return
+
         if not _has_qdrant:
             return
 
@@ -247,13 +260,7 @@ class HybridIndexer:
             if self._embedder is None or self._qdrant_client is None:
                 return
 
-            self._qdrant_client.recreate_collection(
-                collection_name=self.collection_name,
-                vectors_config=VectorParams(
-                    size=self.embedding_dim,
-                    distance=Distance.COSINE,
-                ),
-            )
+            self.ensure_collection()
             self.use_vector = True
         except Exception:
             self.use_vector = False
@@ -279,8 +286,39 @@ class HybridIndexer:
             return QdrantClient(url=self.url, check_compatibility=False)
         return QdrantClient(location=self.location or ":memory:", check_compatibility=False)
 
-    def index_items(self, items: List[IndexedItem]):
-        """Indexes parsed UI components and routes."""
+    def _vector_params(self) -> "VectorParams":
+        return VectorParams(size=self.embedding_dim, distance=Distance.COSINE)
+
+    def ensure_collection(self) -> None:
+        """Create the collection if missing; never wipe existing data."""
+        if not self._qdrant_client:
+            return
+        existing = {c.name for c in self._qdrant_client.get_collections().collections}
+        if self.collection_name not in existing:
+            self._qdrant_client.create_collection(
+                collection_name=self.collection_name,
+                vectors_config=self._vector_params(),
+            )
+
+    def rebuild_collection(self) -> None:
+        """Drop and recreate the collection for a clean full reindex."""
+        self._fallback_indexer.clear()
+        if not self._qdrant_client:
+            return
+        self._qdrant_client.recreate_collection(
+            collection_name=self.collection_name,
+            vectors_config=self._vector_params(),
+        )
+        self.use_vector = True
+
+    def index_items(self, items: List[IndexedItem], *, rebuild: bool = False):
+        """Indexes parsed UI components and routes.
+
+        When rebuild=True, clears prior vectors/fallback docs before upserting.
+        """
+        if rebuild:
+            self.rebuild_collection()
+
         if not items:
             return
 
@@ -288,6 +326,7 @@ class HybridIndexer:
 
         if self.use_vector and self._qdrant_client and self._embedder:
             try:
+                self.ensure_collection()
                 texts = [f"{it.title} | {it.content}" for it in items]
                 embeddings = self._embedder.embed(texts)
 
@@ -336,7 +375,7 @@ class HybridIndexer:
                             file_path=str(payload.get("file_path", "")),
                             item_type=str(payload.get("item_type", "component")),
                             score=float(hit.score),
-                            metadata=payload.get("metadata", {})
+                            metadata=payload.get("metadata", {}) or {},
                         )
                     )
                 return hits
