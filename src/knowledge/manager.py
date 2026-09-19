@@ -68,12 +68,53 @@ class WorkspaceIndexManager:
         return toolbox
 
     def index_workspace(self, toolbox: "Code2GuideToolbox", *, rebuild: bool = True) -> "IndexResult":
-        from src.knowledge.indexer import FrontendIndexer
+        from src.knowledge.indexer import FrontendIndexer, IndexResult
         from src.knowledge.backend_indexer import BackendIndexer
+        from src.knowledge.flow_tracer import FlowIndexer
+        from src.knowledge.incremental import FileHashManifest
 
         toolbox.hybrid_indexer = self.hybrid_indexer
         toolbox._graph_store = self.graph_store
         toolbox._index_manager = self
+
+        manifest = FileHashManifest(self.workspace_path, self.graph_store)
+
+        # Skip-unchanged: only when rebuild=False and graph already exists with identical hashes
+        if not rebuild and self.is_indexed:
+            summary = manifest.summary()
+            if summary.get("unchanged") and not summary.get("changed_files"):
+                prev = dict(self._last_result or self.graph_store.get_meta("stats") or {})
+                result = IndexResult(
+                    workspace_path=self.workspace_path,
+                    duration_ms=0.0,
+                    routes=int(prev.get("routes") or 0),
+                    components=int(prev.get("components") or 0),
+                    forms=int(prev.get("forms") or 0),
+                    form_fields=int(prev.get("form_fields") or 0),
+                    ui_buttons=int(prev.get("ui_buttons") or 0),
+                    i18n_strings=int(prev.get("i18n_strings") or 0),
+                    edges=int(prev.get("edges") or 0),
+                    indexed_count=int(prev.get("indexed_count") or 0),
+                    use_vector=bool(self.hybrid_indexer.use_vector),
+                    collection_name=self.hybrid_indexer.collection_name,
+                    files_inspected=0,
+                    db_path=str(self.graph_store.db_path),
+                    api_endpoints=int(prev.get("api_endpoints") or 0),
+                    services=int(prev.get("services") or 0),
+                    entities=int(prev.get("entities") or 0),
+                    tables=int(prev.get("tables") or 0),
+                    api_calls=int(prev.get("api_calls") or 0),
+                    field_mappings=int(prev.get("field_mappings") or 0),
+                    skipped_unchanged=True,
+                    changed_files=[],
+                    stats={"skipped_unchanged": True, "incremental": summary},
+                )
+                self._last_result = result.to_dict()
+                toolbox._indexed = True
+                return result
+
+        # Any change (or rebuild) → full reindex of current pipeline
+        changed = [] if rebuild else manifest.changed_files()
 
         fe = FrontendIndexer(toolbox, self.graph_store)
         result = fe.index(rebuild=rebuild)
@@ -94,8 +135,28 @@ class WorkspaceIndexManager:
         )
         stats = dict(result.stats or {})
         stats["backend"] = be_info
+
+        flow = FlowIndexer(toolbox, self.graph_store)
+        flow_info = flow.index()
+        result.api_calls = int(flow_info.get("api_calls_linked") or 0)
+        result.field_mappings = int(flow_info.get("field_mappings") or 0)
+        result.edges = int(result.edges or 0) + int(result.api_calls or 0) + int(result.field_mappings or 0)
+        result.duration_ms = round(
+            float(result.duration_ms or 0) + float(flow_info.get("duration_ms") or 0), 2
+        )
+        stats["flow"] = flow_info
+        result.changed_files = changed
+        stats["incremental"] = {
+            "skipped_unchanged": False,
+            "changed_files": changed,
+            "changed_count": len(changed),
+            "full_reindex": True,
+        }
         result.stats = stats
+        result.skipped_unchanged = False
+
         self.graph_store.mark_indexed(result.to_dict())
+        manifest.save()
         self._last_result = result.to_dict()
         toolbox._indexed = True
         return result

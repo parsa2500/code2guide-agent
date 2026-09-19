@@ -27,6 +27,7 @@ class NodeType(str, Enum):
     SERVICE = "service"
     ENTITY = "entity"
     TABLE = "table"
+    DTO = "dto"
 
 
 class EdgeType(str, Enum):
@@ -36,12 +37,13 @@ class EdgeType(str, Enum):
     CONTAINS_FIELD = "contains_field"
     HAS_BUTTON = "has_button"
     USES_I18N = "uses_i18n"
-    # Phase 2/3 stubs
+    # Phase 2/3
     CALLS_API = "calls_api"
     HANDLED_BY = "handled_by"
     USES_SERVICE = "uses_service"
     PERSISTS_TO = "persists_to"
     FK_TO = "fk_to"
+    MAPS_TO = "maps_to"
 
 
 class GraphNode(BaseModel):

@@ -38,6 +38,10 @@ class IndexResult:
     entities: int = 0
     tables: int = 0
     backend_skipped: bool = False
+    api_calls: int = 0
+    field_mappings: int = 0
+    skipped_unchanged: bool = False
+    changed_files: List[str] = field(default_factory=list)
     stats: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -61,6 +65,10 @@ class IndexResult:
             "entities": self.entities,
             "tables": self.tables,
             "backend_skipped": self.backend_skipped,
+            "api_calls": self.api_calls,
+            "field_mappings": self.field_mappings,
+            "skipped_unchanged": self.skipped_unchanged,
+            "changed_files": self.changed_files,
             "stats": self.stats,
         }
 

@@ -13,6 +13,7 @@ from src.parsers.route_extractor import RouteNode
 from src.agent.state import AgentState
 from src.agent.tools import Code2GuideToolbox, dump_model
 from src.agent.prompts import SYSTEM_PROMPT, UX_GUIDE_TEMPLATE
+from src.agent.planner import QueryPlanner
 from src.knowledge.schema import NodeType
 
 try:
@@ -35,6 +36,7 @@ class Code2GuideWorkflow:
         self.workspace_path = workspace_path or settings.target_workspace_path
         self.toolbox = toolbox or Code2GuideToolbox(self.workspace_path)
         self.normalizer = default_normalizer
+        self.planner = QueryPlanner()
         self.compiled_graph = self._build_graph()
 
     def _build_graph(self):
@@ -44,18 +46,34 @@ class Code2GuideWorkflow:
 
         workflow = StateGraph(AgentState)
 
+        workflow.add_node("plan_query", self.node_plan_query)
         workflow.add_node("discover_routes", self.node_discover_routes)
         workflow.add_node("search_labels", self.node_search_labels)
         workflow.add_node("inspect_ast", self.node_inspect_ast)
+        workflow.add_node("gather_evidence", self.node_gather_evidence)
         workflow.add_node("synthesize_guide", self.node_synthesize_guide)
 
-        workflow.set_entry_point("discover_routes")
+        workflow.set_entry_point("plan_query")
+        workflow.add_edge("plan_query", "discover_routes")
         workflow.add_edge("discover_routes", "search_labels")
         workflow.add_edge("search_labels", "inspect_ast")
-        workflow.add_edge("inspect_ast", "synthesize_guide")
+        workflow.add_edge("inspect_ast", "gather_evidence")
+        workflow.add_edge("gather_evidence", "synthesize_guide")
         workflow.add_edge("synthesize_guide", END)
 
         return workflow.compile()
+
+    def node_plan_query(self, state: AgentState) -> Dict[str, Any]:
+        plan = self.planner.plan(state.query)
+        state.query_plan = plan.model_dump()
+        state.is_backend_query = plan.intent in ("api", "data", "mixed") or Code2GuideToolbox.is_backend_query(
+            state.query
+        )
+        state.is_flow_query = plan.intent in ("flow", "mixed") or Code2GuideToolbox.is_flow_query(state.query)
+        state.steps_taken.append(
+            f"Planned intent={plan.intent} tools={plan.tools} skip_ast={plan.skip_ast}"
+        )
+        return dump_model(state)
 
     def node_discover_routes(self, state: AgentState) -> Dict[str, Any]:
         state.iteration += 1
@@ -116,7 +134,10 @@ class Code2GuideWorkflow:
         state.identified_routes = matching_routes
         state.extracted_breadcrumbs = best_crumbs
 
-        state.is_backend_query = self.toolbox.is_backend_query(query)
+        plan = state.query_plan or {}
+        if not plan:
+            state.is_backend_query = self.toolbox.is_backend_query(query)
+            state.is_flow_query = self.toolbox.is_flow_query(query)
         backend_hits = self.toolbox.search_backend(query, limit=12)
         # If hybrid already returned backend item types, ensure they're included
         for hit in hybrid_hits:
@@ -133,6 +154,16 @@ class Code2GuideWorkflow:
                         }
                     )
         state.backend_hits = backend_hits
+
+        if state.is_flow_query or (state.is_backend_query and matching_routes) or (
+            (state.query_plan or {}).get("intent") in ("flow", "mixed")
+        ):
+            ref = (state.query_plan or {}).get("trace_ref") or "/"
+            if matching_routes:
+                ref = matching_routes[0].path or matching_routes[0].file_path or ref
+            elif ref == "/":
+                ref = self.toolbox.infer_trace_ref_from_query(query)
+            state.flow_trace = self.toolbox.trace_flow(ref)
 
         route_paths = [r.path for r in matching_routes]
         state.required_roles = self.toolbox.roles_for_routes(route_paths)
@@ -152,6 +183,11 @@ class Code2GuideWorkflow:
         return dump_model(state)
 
     def node_search_labels(self, state: AgentState) -> Dict[str, Any]:
+        plan = state.query_plan or {}
+        if plan.get("skip_ast") or plan.get("skip_ux_template"):
+            state.steps_taken.append("Skipped label search (intent does not need UX labels)")
+            return dump_model(state)
+
         keywords = self.normalizer.extract_keywords(state.query)
         all_matches = []
         seen_lines = set()
@@ -213,6 +249,11 @@ class Code2GuideWorkflow:
         return dump_model(state)
 
     def node_inspect_ast(self, state: AgentState) -> Dict[str, Any]:
+        plan = state.query_plan or {}
+        if plan.get("skip_ast"):
+            state.steps_taken.append("Skipped AST inspect (flow/api/data intent)")
+            return dump_model(state)
+
         target_files: Set[str] = set()
         ws_root = Path(state.workspace_path)
         index_exists = bool(self.toolbox.graph_store.status().get("exists"))
@@ -351,9 +392,199 @@ class Code2GuideWorkflow:
         )
         return dump_model(state)
 
+    def node_gather_evidence(self, state: AgentState) -> Dict[str, Any]:
+        plan = state.query_plan or {}
+        tools = list(plan.get("tools") or ["search_code"])
+        intent = plan.get("intent") or "ux"
+        if intent in ("flow", "api", "data", "mixed") and "trace_flow" not in tools and intent in (
+            "flow",
+            "mixed",
+        ):
+            tools.append("trace_flow")
+
+        trace_ref = plan.get("trace_ref")
+        if state.identified_routes:
+            trace_ref = state.identified_routes[0].path or trace_ref
+
+        evidence = self.toolbox.gather_tool_evidence(
+            state.query,
+            tools=tools,
+            trace_ref=trace_ref,
+        )
+        # Enrich from already-discovered UX forms (cited)
+        for f in state.discovered_forms:
+            for field in f.fields:
+                label = field.label or field.name or ""
+                if not label or not f.file_path:
+                    continue
+                ev = self.toolbox._as_evidence(
+                    tool="inspect_form",
+                    file_path=f.file_path,
+                    symbol=label,
+                    id=f"field:{f.file_path}:{field.name or label}",
+                    evidence=f"field {label} type={field.field_type} required={field.required}",
+                )
+                if ev:
+                    evidence.append(ev)
+        for r in state.identified_routes:
+            if not r.file_path and not r.path:
+                continue
+            ev = self.toolbox._as_evidence(
+                tool="get_route",
+                file_path=r.file_path or "src/routes.tsx",
+                symbol=r.path or r.title,
+                id=f"route:{r.path}",
+                evidence=f"route {r.path}; breadcrumbs={' > '.join(r.breadcrumbs or [])}",
+                extra={"breadcrumbs": list(r.breadcrumbs or []), "path": r.path},
+            )
+            if ev and not any(e.get("id") == ev.get("id") for e in evidence):
+                evidence.append(ev)
+
+        state.tool_evidence = evidence
+        state.steps_taken.append(f"Gathered {len(evidence)} cited tool evidence items")
+        return dump_model(state)
+
+    def _format_evidence_markdown(self, evidence: List[Dict[str, Any]], tools_filter: Optional[Set[str]] = None) -> str:
+        lines: List[str] = []
+        for e in evidence:
+            if tools_filter and e.get("tool") not in tools_filter:
+                continue
+            fpath = e.get("file_path") or ""
+            symbol = e.get("symbol") or e.get("id") or ""
+            text = e.get("evidence") or symbol
+            lines.append(f"- **{symbol}** — `{fpath}` — {text}")
+        return "\n".join(lines)
+
     def node_synthesize_guide(self, state: AgentState) -> Dict[str, Any]:
-        """Synthesizes Persian UX guidance using real LLM if configured, or deterministic template fallback."""
-        # 1. Prepare structured data
+        """Synthesizes Persian guidance from cited evidence; no guessing when empty."""
+        plan = state.query_plan or {}
+        intent = plan.get("intent") or "ux"
+        evidence = state.tool_evidence or []
+
+        # Hard rule: no evidence → refuse to invent
+        has_ux = bool(state.discovered_forms or state.identified_routes or state.extracted_breadcrumbs)
+        if intent == "unknown" or (
+            not evidence and not has_ux and not state.backend_hits and not state.flow_trace
+        ):
+            state.final_persian_guide = normalize_guide_markdown(
+                "## نتیجه جستجو\n\n"
+                f"**پرسش:** {state.query}\n\n"
+                "در ایندکس یافت نشد. هیچ شاهد استنادپذیری برای این پرسش در گراف دانش موجود نیست.\n"
+            )
+            state.status = "completed"
+            state.steps_taken.append("No evidence — refused to invent answer")
+            return dump_model(state)
+
+        backend_md = self.toolbox.format_backend_markdown(state.backend_hits or [])
+        flow_md = ""
+        if state.flow_trace:
+            from src.knowledge.flow_tracer import FlowTracer
+
+            flow_md = FlowTracer(self.toolbox.graph_store).format_markdown(state.flow_trace)
+        elif state.is_flow_query:
+            ref = (plan.get("trace_ref") or self.toolbox.infer_trace_ref_from_query(state.query))
+            if state.identified_routes:
+                ref = state.identified_routes[0].path or ref
+            flow_md = self.toolbox.format_flow_markdown(ref)
+
+        api_ev = self._format_evidence_markdown(evidence, {"get_api", "search_code"})
+        entity_ev = self._format_evidence_markdown(evidence, {"get_entity", "get_table"})
+        route_ev = self._format_evidence_markdown(evidence, {"get_route", "inspect_form"})
+        flow_ev = self._format_evidence_markdown(evidence, {"trace_flow"})
+
+        # Intent-specialized answers
+        if intent == "flow" and (flow_md or flow_ev):
+            guide = (
+                f"## جریان کامل سیستم\n\n"
+                f"**پرسش:** {state.query}\n\n"
+                f"{flow_md or flow_ev}\n"
+            )
+            if backend_md:
+                guide += "\n" + backend_md + "\n"
+            if route_ev:
+                guide += "\n### مسیر UI (با استناد)\n\n" + route_ev + "\n"
+            state.final_persian_guide = normalize_guide_markdown(guide)
+            state.status = "completed"
+            state.steps_taken.append("Synthesized flow answer with citations")
+            return dump_model(state)
+
+        if intent in ("api", "data") and (backend_md or api_ev or entity_ev):
+            title = "API" if intent == "api" else "داده / Entity / Table"
+            guide = (
+                f"## پاسخ بر اساس ایندکس ({title})\n\n"
+                f"**پرسش:** {state.query}\n\n"
+            )
+            if intent == "api" and api_ev:
+                guide += "### نقاط پایانی API\n\n" + api_ev + "\n\n"
+            if intent == "data" and entity_ev:
+                guide += "### Entity / Table\n\n" + entity_ev + "\n\n"
+            if backend_md:
+                guide += backend_md + "\n"
+            if flow_md and intent != "api":
+                guide += "\n" + flow_md + "\n"
+            state.final_persian_guide = normalize_guide_markdown(guide)
+            state.status = "completed"
+            state.steps_taken.append(f"Synthesized {intent} answer from cited tools")
+            return dump_model(state)
+
+        if intent == "mixed":
+            parts = [f"## پاسخ ترکیبی\n\n**پرسش:** {state.query}\n"]
+            if has_ux or route_ev:
+                parts.append("\n### بخش UX\n")
+                if state.extracted_breadcrumbs:
+                    parts.append("> مسیر: **" + " > ".join(state.extracted_breadcrumbs) + "**\n")
+                if route_ev:
+                    parts.append(route_ev + "\n")
+            if backend_md or api_ev or entity_ev:
+                parts.append("\n### بخش بک‌اند\n")
+                if api_ev:
+                    parts.append(api_ev + "\n")
+                if entity_ev:
+                    parts.append(entity_ev + "\n")
+                if backend_md:
+                    parts.append(backend_md + "\n")
+            if flow_md or flow_ev:
+                parts.append("\n### بخش جریان\n")
+                parts.append((flow_md or flow_ev) + "\n")
+            if len(parts) == 1:
+                parts.append("\nدر ایندکس یافت نشد.\n")
+            state.final_persian_guide = normalize_guide_markdown("\n".join(parts))
+            state.status = "completed"
+            state.steps_taken.append("Synthesized mixed UX+backend+flow answer")
+            return dump_model(state)
+
+        # Legacy flow / backend shortcuts when plan says ux but flags set
+        if state.is_flow_query and flow_md:
+            guide = (
+                f"## جریان کامل سیستم\n\n"
+                f"**پرسش:** {state.query}\n\n"
+                f"{flow_md}\n"
+            )
+            if backend_md:
+                guide += "\n" + backend_md + "\n"
+            state.final_persian_guide = normalize_guide_markdown(guide)
+            state.status = "completed"
+            state.steps_taken.append("Synthesized end-to-end flow trace with citations")
+            return dump_model(state)
+
+        if state.is_backend_query and backend_md and (
+            not state.discovered_forms or len(state.backend_hits) > 0
+        ):
+            guide = (
+                f"## پاسخ بر اساس ایندکس بک‌اند\n\n"
+                f"**پرسش:** {state.query}\n\n"
+                f"{backend_md}\n"
+            )
+            if flow_md:
+                guide += "\n" + flow_md + "\n"
+            state.final_persian_guide = normalize_guide_markdown(guide)
+            state.status = "completed"
+            state.steps_taken.append(
+                f"Synthesized backend answer from {len(state.backend_hits)} indexed symbols"
+            )
+            return dump_model(state)
+
+        # UX template path
         nav_lines = []
         if state.extracted_breadcrumbs:
             crumb_str = " > ".join(state.extracted_breadcrumbs)
@@ -381,7 +612,8 @@ class Code2GuideWorkflow:
                 fname = field.label or field.name or "فیلد ورودی"
                 ftype = f"({field.field_type})" if field.field_type else ""
                 val_note = f" - *اعتبارسنجی: {field.validation_message}*" if field.validation_message else ""
-                item_str = f"- **{fname}** {ftype}{val_note}"
+                cite = f" — `{f.file_path}`" if f.file_path else ""
+                item_str = f"- **{fname}** {ftype}{val_note}{cite}"
 
                 if field.required:
                     req_fields.append(item_str)
@@ -397,7 +629,10 @@ class Code2GuideWorkflow:
             fields_lines.extend(opt_fields)
 
         if not all_fields:
-            fields_lines.append("- اطلاعات پایه مورد نیاز را مطابق فرم در دسترس وارد فرمایید.")
+            if evidence:
+                fields_lines.append(self._format_evidence_markdown(evidence) or "- شاهد مرتبط در ایندکس یافت شد ولی فرم UI استخراج نشد.")
+            else:
+                fields_lines.append("- در ایندکس یافت نشد.")
 
         if state.validation_notes:
             fields_lines.append("\n#### قیود اعتبارسنجی کشف‌شده از اسکیما/فرم:")
@@ -442,32 +677,13 @@ class Code2GuideWorkflow:
 
         task_title = state.query.replace("چگونه", "").replace("کنم؟", "").replace("کنیم؟", "").strip() or "عملیات"
 
-        backend_md = self.toolbox.format_backend_markdown(state.backend_hits or [])
-
-        # Pure backend Q&A: answer from indexed graph with citations (skip UX template noise)
-        if state.is_backend_query and backend_md and (
-            not state.discovered_forms or len(state.backend_hits) > 0
-        ):
-            guide = (
-                f"## پاسخ بر اساس ایندکس بک‌اند\n\n"
-                f"**پرسش:** {state.query}\n\n"
-                f"{backend_md}\n"
-            )
-            state.final_persian_guide = normalize_guide_markdown(guide)
-            state.status = "completed"
-            state.steps_taken.append(
-                f"Synthesized backend answer from {len(state.backend_hits)} indexed symbols"
-            )
-            return dump_model(state)
-
-        # 2. Attempt Real LLM Synthesis if API key is provided (OpenRouter preferred)
         api_key = (
             settings.openrouter_api_key
             or os.getenv("OPENROUTER_API_KEY")
             or settings.openai_api_key
             or os.getenv("OPENAI_API_KEY")
         )
-        if api_key:
+        if api_key and not plan.get("skip_ux_template"):
             try:
                 model_name = settings.openrouter_model or settings.default_model
                 llm_output = self._call_real_llm(
@@ -489,10 +705,8 @@ class Code2GuideWorkflow:
                     )
                     return dump_model(state)
             except Exception as e:
-                # Log error and continue to deterministic template fallback
                 state.steps_taken.append(f"LLM synthesis fallback due to: {str(e)}")
 
-        # 3. Deterministic Template Fallback
         guide = UX_GUIDE_TEMPLATE.format(
             task_title=task_title,
             navigation_steps=nav_section,
@@ -503,6 +717,10 @@ class Code2GuideWorkflow:
         )
         if backend_md:
             guide = guide.rstrip() + "\n\n" + backend_md + "\n"
+        if flow_md:
+            guide = guide.rstrip() + "\n\n" + flow_md + "\n"
+        if route_ev and "عنوان مناقصه" not in guide:
+            guide = guide.rstrip() + "\n\n### استناد مسیر/فیلد\n\n" + route_ev + "\n"
 
         state.final_persian_guide = normalize_guide_markdown(guide)
         state.status = "completed"
@@ -608,9 +826,11 @@ class Code2GuideWorkflow:
             return output
         else:
             s = initial_state
+            self.node_plan_query(s)
             self.node_discover_routes(s)
             self.node_search_labels(s)
             self.node_inspect_ast(s)
+            self.node_gather_evidence(s)
             self.node_synthesize_guide(s)
             return s
 

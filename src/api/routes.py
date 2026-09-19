@@ -52,7 +52,7 @@ class IndexWorkspaceRequest(BaseModel):
 
 
 class IndexWorkspaceResponse(BaseModel):
-    """Summary of deep frontend + backend indexing."""
+    """Summary of deep frontend + backend + flow indexing."""
     workspace_path: str
     duration_ms: float = 0.0
     routes: int = 0
@@ -65,6 +65,8 @@ class IndexWorkspaceResponse(BaseModel):
     services: int = 0
     entities: int = 0
     tables: int = 0
+    api_calls: int = 0
+    field_mappings: int = 0
     edges: int = 0
     indexed_count: int = 0
     files_inspected: int = 0
@@ -161,6 +163,8 @@ def index_workspace(payload: IndexWorkspaceRequest):
             services=d.get("services", 0),
             entities=d.get("entities", 0),
             tables=d.get("tables", 0),
+            api_calls=d.get("api_calls", 0),
+            field_mappings=d.get("field_mappings", 0),
             edges=d.get("edges", 0),
             indexed_count=d.get("indexed_count", 0),
             files_inspected=d.get("files_inspected", 0),
@@ -171,7 +175,8 @@ def index_workspace(payload: IndexWorkspaceRequest):
             message=(
                 f"Indexed FE: {d.get('routes', 0)} routes, {d.get('forms', 0)} forms; "
                 f"BE: {d.get('api_endpoints', 0)} APIs, {d.get('services', 0)} services, "
-                f"{d.get('entities', 0)} entities, {d.get('tables', 0)} tables "
+                f"{d.get('entities', 0)} entities, {d.get('tables', 0)} tables; "
+                f"flow: {d.get('api_calls', 0)} API calls, {d.get('field_mappings', 0)} field maps "
                 f"in {d.get('duration_ms', 0)}ms."
             ),
         )
@@ -193,6 +198,27 @@ def index_status(workspace_path: Optional[str] = Query(default=None)):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error reading index status: {str(e)}"
+        )
+
+
+@router.get(
+    "/trace",
+    summary="Trace end-to-end flow from a UI route/page to API → service → entity → table",
+)
+def trace_flow(
+    from_ref: str = Query(..., alias="from", description="route:/tenders/create or /tenders/create"),
+    workspace_path: Optional[str] = Query(default=None),
+):
+    """Walk the knowledge graph from a frontend entrypoint through backend layers."""
+    target_ws = workspace_path or settings.target_workspace_path
+    try:
+        toolbox = _toolbox_for(target_ws)
+        toolbox.ensure_indexed()
+        return toolbox.trace_flow(from_ref)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error tracing flow: {str(e)}"
         )
 
 

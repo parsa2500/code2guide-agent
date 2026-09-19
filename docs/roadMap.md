@@ -15,10 +15,10 @@
 | ایندکس یک‌باره کل پروژه (فرانت) | آماده (`POST /index-workspace` + `src/knowledge/`) |
 | Hybrid / Qdrant در مسیر `/ask` | وصل؛ retrieval-first از گراف + بردار |
 | پارس بک‌اند (API / service / entity / DB) | آماده برای .NET (`src/parsers/dotnet/` + BackendIndexer) |
-| گراف رابطه فرانت ↔ بک | نیست (فاز ۳) |
-| Q&A آزاد روی کل سیستم | جزئی — سؤال بک با استناد؛ UX کامل؛ end-to-end نه (فاز ۴) |
+| گراف رابطه فرانت ↔ بک | آماده (`CALLS_API` + `GET /api/v1/trace` + field `MAPS_TO`) |
+| Q&A آزاد روی کل سیستم | آماده — planner + tools + citations + golden set + incremental skip |
 
-**جمع‌بندی مبدأ:** فاز ۰ تا ۲ انجام شده — فرانت + بک .NET در یک workspace واحد ایندکس می‌شوند. tracer ف↔ب هنوز نیست.
+**جمع‌بندی مبدأ:** فاز ۰ تا ۴ انجام شده — ایندکس فرانت+بک .NET، زنجیره end-to-end، Q&A با planner/استناد، و skip-unchanged.
 
 ---
 
@@ -107,40 +107,34 @@
 
 ### فاز ۳ — رابطه فرانت ↔ بک (Trace)
 
-**هدف:** جریان end-to-end را وصل کند.
+**هدف:** جریان end-to-end را وصل کند. ✅
 
-1. **Tracer سمت فرانت**
-   - پیدا کردن `fetch` / `axios` / React Query / RTK / سرویس‌های API client
-   - نگاشت URL/method به `ApiEndpoint`
-2. **Tracer سمت بک**
-   - از route handler تا service تا repository/entity
-3. **لینک فرم ↔ payload**
-   - نام فیلد UI ≈ کلید DTO/schema
-4. **لینک entity ↔ جدول**
-   - از مدل ORM به migration/SQL
-5. **API برای جریان**
-   - مثلاً `GET /trace?from=page:/tenders/create` → زنجیره کامل
+1. **Tracer سمت فرانت** ✅ — `FrontendApiTracer` (fetch/axios/RQ)
+2. **Tracer سمت بک** ✅ — یال‌های `HANDLED_BY` / `USES_SERVICE` / `PERSISTS_TO`
+3. **لینک فرم ↔ payload** ✅ — `FieldLinker` + `MAPS_TO`
+4. **لینک entity ↔ جدول** ✅ — از فاز ۲ + تأیید در trace
+5. **API برای جریان** ✅ — `GET /api/v1/trace?from=…`
 
-**معیار آمادگی فاز ۳:** برای یک صفحه کلیدی، زنجیره Page → API → Service → Entity → Table ساخته شود.
+**معیار آمادگی فاز ۳:** برای یک صفحه کلیدی، زنجیره Page → API → Service → Entity → Table ساخته شود. ✅ (`/tenders/create`)
 
 ---
 
 ### فاز ۴ — Q&A مسلط روی کل سیستم
 
-**هدف:** «هر سؤالی» در محدودهٔ ایندکس‌شده، قابل پاسخ باشد.
+**هدف:** «هر سؤالی» در محدودهٔ ایندکس‌شده، قابل پاسخ باشد. ✅
 
-1. **ابزارهای agent**
+1. **ابزارهای agent** ✅
    - `search_code`, `get_route`, `get_api`, `get_entity`, `get_table`, `trace_flow`
-2. **Planner چندمرحله‌ای**
-   - تشخیص نوع سؤال: UX / API / دیتا / جریان کامل
-3. **پاسخ با استناد**
-   - همیشه فایل + سیمبل؛ ممنوعیت حدس بدون منبع
-4. **ارزیابی**
-   - مجموعه سؤال طلایی (golden set) روی یک پروژه نمونه
-5. **بازایندیس افزایشی**
-   - watch یا hash فایل‌ها برای update جزئی
+2. **Planner چندمرحله‌ای** ✅
+   - تشخیص نوع سؤال: UX / API / دیتا / جریان کامل (`src/agent/planner.py`)
+3. **پاسخ با استناد** ✅
+   - همیشه فایل + سیمبل؛ ممنوعیت حدس بدون منبع (`tool_evidence`)
+4. **ارزیابی** ✅
+   - مجموعه سؤال طلایی (`tests/golden/sample_workspace_qa.json` + `test_golden_qa.py`)
+5. **بازایندیس افزایشی** ✅
+   - hash فایل‌ها برای skip-unchanged وقتی `rebuild=false` (`src/knowledge/incremental.py`)
 
-**معیار آمادگی فاز ۴:** دقت قابل قبول روی golden set برای سؤال‌های UX، منطق، و end-to-end.
+**معیار آمادگی فاز ۴:** دقت قابل قبول روی golden set برای سؤال‌های UX، منطق، و end-to-end. ✅
 
 ---
 
@@ -155,10 +149,10 @@
 | 5 | پارسر API بک (.NET) | ۲ ✅ |
 | 6 | پارسر service/class | ۲ ✅ |
 | 7 | پارسر entity + DB schema | ۲ ✅ |
-| 8 | Tracer فراخوانی ف↔ب | ۳ |
-| 9 | لینک فیلد فرم ↔ DTO ↔ ستون | ۳ |
-| 10 | ابزارهای Q&A + planner | ۴ |
-| 11 | golden set + ایندکس افزایشی | ۴ |
+| 8 | Tracer فراخوانی ف↔ب | ۳ ✅ |
+| 9 | لینک فیلد فرم ↔ DTO ↔ ستون | ۳ ✅ |
+| 10 | ابزارهای Q&A + planner | ۴ ✅ |
+| 11 | golden set + ایندکس افزایشی | ۴ ✅ |
 
 ---
 
@@ -194,6 +188,6 @@
 
 ## قدم بعدی پیشنهادی بعد از این سند
 
-فاز ۰ تا ۲ پیاده‌سازی شده‌اند. workspace را به صورت والد واحد (`frontend/` + `backend/`) بدهید.
+فاز ۰ تا ۴ پیاده‌سازی شده‌اند (`QueryPlanner`, ابزارهای cited، golden set، `FileHashManifest`).
 
-قدم بعدی: **فاز ۳** — tracer رابطه فرانت ↔ بک (fetch/axios → API → service → entity → table).
+قدم بعدی (اختیاری): partial reindex per-file، watch daemon، یا پارسر استک غیر-.NET.

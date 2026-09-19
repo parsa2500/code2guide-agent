@@ -31,6 +31,13 @@ class AgentState(BaseModel):
         description="Backend graph/hybrid hits (entity/service/api/table)",
     )
     is_backend_query: bool = Field(default=False, description="Query primarily about backend logic/data")
+    is_flow_query: bool = Field(default=False, description="Query about end-to-end UI→API→DB flow")
+    flow_trace: Optional[Dict[str, Any]] = Field(default=None, description="Trace result for flow questions")
+    query_plan: Optional[Dict[str, Any]] = Field(default=None, description="QueryPlanner output")
+    tool_evidence: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Cited evidence gathered from agent tools",
+    )
 
     # Tracking & Messaging
     messages: List[Dict[str, Any]] = Field(default_factory=list, description="Interaction history")

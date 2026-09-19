@@ -470,6 +470,57 @@ class Code2GuideToolbox:
         ]
         return any(k in q for k in keywords)
 
+    @staticmethod
+    def is_flow_query(query: str) -> bool:
+        q = (query or "").lower()
+        keywords = [
+            "جریان",
+            "trace",
+            "end-to-end",
+            "end to end",
+            "از ui تا",
+            "تا db",
+            "تا دیتابیس",
+            "کدوم api",
+            "کدام api",
+            "چطور ذخیره",
+            "چگونه ذخیره",
+            "فلو",
+            "flow",
+            "زنجیره",
+            "از فرم تا",
+            "فراخوانی api",
+        ]
+        return any(k in q for k in keywords)
+
+    def trace_flow(self, from_ref: str) -> Dict[str, Any]:
+        from src.knowledge.flow_tracer import FlowTracer
+
+        return FlowTracer(self.graph_store).trace(from_ref)
+
+    def format_flow_markdown(self, from_ref: str) -> str:
+        from src.knowledge.flow_tracer import FlowTracer
+
+        tracer = FlowTracer(self.graph_store)
+        result = tracer.trace(from_ref)
+        return tracer.format_markdown(result)
+
+    def infer_trace_ref_from_query(self, query: str) -> str:
+        """Pick a likely route path from hybrid/backend context or keywords."""
+        q = (query or "").lower()
+        # Prefer identified routes later; here keyword heuristic
+        if "tender" in q or "مناقصه" in q:
+            return "/tenders/create"
+        routes = self.graph_store.list_nodes(NodeType.ROUTE, limit=50)
+        for r in routes:
+            path = (r.payload or {}).get("path") or ""
+            title = (r.title or "").lower()
+            if path and (path.lstrip("/").split("/")[0] in q or any(w in title for w in q.split() if len(w) > 3)):
+                return path
+        if routes:
+            return (routes[0].payload or {}).get("path") or routes[0].id
+        return "/"
+
     def search_backend(self, query: str, limit: int = 15) -> List[Dict[str, Any]]:
         """Search indexed API/service/entity/table nodes."""
         store = self.graph_store
@@ -521,6 +572,137 @@ class Code2GuideToolbox:
             )
         return results[:limit]
 
+    @staticmethod
+    def _as_evidence(
+        *,
+        tool: str,
+        file_path: Optional[str],
+        symbol: Optional[str] = None,
+        id: Optional[str] = None,
+        evidence: Optional[str] = None,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Citation contract: drop items missing file_path + (symbol or id) + evidence."""
+        if not file_path:
+            return None
+        if not (symbol or id):
+            return None
+        if not evidence:
+            return None
+        item: Dict[str, Any] = {
+            "tool": tool,
+            "file_path": file_path.replace("\\", "/"),
+            "symbol": symbol or id,
+            "id": id or symbol,
+            "evidence": evidence,
+        }
+        if extra:
+            item.update(extra)
+        return item
+
+    def search_code(self, query: str, limit: int = 12) -> List[Dict[str, Any]]:
+        """Hybrid + lexical search returning cited snippets."""
+        evidence: List[Dict[str, Any]] = []
+        hybrid = self.hybrid_search(query, limit=limit).get("hits") or []
+        for h in hybrid:
+            fpath = h.get("file_path") or ""
+            title = h.get("title") or h.get("id") or ""
+            snippet = (h.get("content") or title or "")[:240]
+            ev = self._as_evidence(
+                tool="search_code",
+                file_path=fpath,
+                symbol=title,
+                id=h.get("id"),
+                evidence=snippet or title,
+                extra={"item_type": h.get("item_type"), "score": h.get("score")},
+            )
+            if ev:
+                evidence.append(ev)
+
+        if self.graph_store.status().get("exists"):
+            for n in self.graph_store.search_nodes(query, limit=limit):
+                fpath = n.file_path or ""
+                title = n.title or n.id
+                if any(e.get("id") == n.id for e in evidence):
+                    continue
+                ev = self._as_evidence(
+                    tool="search_code",
+                    file_path=fpath,
+                    symbol=title,
+                    id=n.id,
+                    evidence=title,
+                    extra={
+                        "item_type": n.node_type.value if hasattr(n.node_type, "value") else str(n.node_type),
+                    },
+                )
+                if ev:
+                    evidence.append(ev)
+        return evidence[:limit]
+
+    def get_route(self, query: str = "") -> List[Dict[str, Any]]:
+        """Cited ROUTE nodes from graph / hierarchy."""
+        evidence: List[Dict[str, Any]] = []
+        if query:
+            hier = self.get_route_hierarchy(query)
+            for r in hier.get("routes") or []:
+                fpath = r.get("file_path") or ""
+                path = r.get("path") or ""
+                title = r.get("title") or path
+                crumbs = r.get("breadcrumbs") or []
+                ev = self._as_evidence(
+                    tool="get_route",
+                    file_path=fpath or "src/routes.tsx",
+                    symbol=path or title,
+                    id=f"route:{path}" if path else None,
+                    evidence=f"route {path}; breadcrumbs={' > '.join(crumbs)}; title={title}",
+                    extra={"path": path, "breadcrumbs": crumbs, "title": title},
+                )
+                if ev:
+                    evidence.append(ev)
+
+        if self.graph_store.status().get("exists"):
+            nodes = self.graph_store.search_nodes(
+                query or "",
+                node_types=[NodeType.ROUTE.value],
+                limit=15,
+            ) if query else self.graph_store.list_nodes(NodeType.ROUTE, limit=30)
+            for n in nodes:
+                path = (n.payload or {}).get("path") or ""
+                if any(e.get("id") == n.id for e in evidence):
+                    continue
+                crumbs = list((n.payload or {}).get("breadcrumbs") or [])
+                ev = self._as_evidence(
+                    tool="get_route",
+                    file_path=n.file_path or "src/routes.tsx",
+                    symbol=path or n.title,
+                    id=n.id,
+                    evidence=f"route {path}; breadcrumbs={' > '.join(crumbs)}; title={n.title}",
+                    extra={"path": path, "breadcrumbs": crumbs, "title": n.title},
+                )
+                if ev:
+                    evidence.append(ev)
+        return evidence
+
+    def get_api(self, query: str = "", limit: int = 20) -> List[Dict[str, Any]]:
+        """Cited API endpoints from index."""
+        evidence: List[Dict[str, Any]] = []
+        for h in self.get_api_endpoints_from_index(query, limit=limit):
+            payload = h.get("payload") or {}
+            method = payload.get("method") or ""
+            path = payload.get("path") or h.get("title") or ""
+            fpath = h.get("file_path") or ""
+            ev = self._as_evidence(
+                tool="get_api",
+                file_path=fpath,
+                symbol=f"{method} {path}".strip(),
+                id=h.get("id"),
+                evidence=f"{method} {path} action={payload.get('action_name') or ''}".strip(),
+                extra={"method": method, "path": path, "payload": payload},
+            )
+            if ev:
+                evidence.append(ev)
+        return evidence
+
     def get_entity(self, name_or_query: str) -> Optional[Dict[str, Any]]:
         hits = self.search_backend(name_or_query, limit=10)
         for h in hits:
@@ -538,6 +720,75 @@ class Code2GuideToolbox:
             }
         return None
 
+    def get_entity_evidence(self, name_or_query: str) -> List[Dict[str, Any]]:
+        """Cited entity lookup (list form for tool_evidence)."""
+        evidence: List[Dict[str, Any]] = []
+        hit = self.get_entity(name_or_query)
+        candidates = [hit] if hit else []
+        if not candidates:
+            candidates = [
+                h for h in self.search_backend(name_or_query, limit=10)
+                if h.get("node_type") in ("entity", NodeType.ENTITY.value)
+            ]
+        for h in candidates:
+            if not h:
+                continue
+            payload = h.get("payload") or {}
+            fields = payload.get("fields") or []
+            if fields and isinstance(fields[0], dict):
+                field_bits = ", ".join(f.get("name", "") for f in fields[:20])
+            else:
+                field_bits = ", ".join(str(f) for f in fields[:20])
+            table = payload.get("table_name") or ""
+            title = h.get("title") or ""
+            ev = self._as_evidence(
+                tool="get_entity",
+                file_path=h.get("file_path"),
+                symbol=title,
+                id=h.get("id"),
+                evidence=f"entity {title} table={table} fields=[{field_bits}]",
+                extra={"payload": payload, "table_name": table},
+            )
+            if ev:
+                evidence.append(ev)
+        return evidence
+
+    def get_table(self, name_or_query: str = "", limit: int = 15) -> List[Dict[str, Any]]:
+        """Cited TABLE nodes from the knowledge graph."""
+        evidence: List[Dict[str, Any]] = []
+        store = self.graph_store
+        if not store.status().get("exists"):
+            return evidence
+        q = (name_or_query or "").strip()
+        nodes = (
+            store.search_nodes(q, node_types=[NodeType.TABLE.value], limit=limit)
+            if q
+            else store.list_nodes(NodeType.TABLE, limit=limit)
+        )
+        # Also try direct id
+        if q:
+            direct = store.get_node(f"table:{q}") or store.get_node(f"table:{q.lower()}")
+            if direct and direct.id not in {n.id for n in nodes}:
+                nodes = [direct, *nodes]
+        for n in nodes:
+            payload = n.payload or {}
+            cols = payload.get("columns") or []
+            if cols and isinstance(cols[0], dict):
+                cbits = ", ".join(c.get("name", "") for c in cols[:20])
+            else:
+                cbits = ", ".join(str(c) for c in cols[:20])
+            ev = self._as_evidence(
+                tool="get_table",
+                file_path=n.file_path or "(schema)",
+                symbol=n.title or n.id,
+                id=n.id,
+                evidence=f"table {n.title} columns=[{cbits}]",
+                extra={"payload": payload},
+            )
+            if ev:
+                evidence.append(ev)
+        return evidence
+
     def get_api_endpoints_from_index(self, query: str = "", limit: int = 20) -> List[Dict[str, Any]]:
         if query:
             return [h for h in self.search_backend(query, limit=limit) if h.get("node_type") in ("api", NodeType.API_ENDPOINT.value)]
@@ -552,6 +803,59 @@ class Code2GuideToolbox:
             }
             for n in nodes
         ]
+
+    def gather_tool_evidence(self, query: str, tools: List[str], trace_ref: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Run planned tools and return citation-ready evidence list."""
+        out: List[Dict[str, Any]] = []
+        toolset = set(tools or [])
+
+        if "search_code" in toolset:
+            out.extend(self.search_code(query))
+        if "get_route" in toolset:
+            out.extend(self.get_route(query))
+        if "get_api" in toolset:
+            out.extend(self.get_api(query))
+        if "get_entity" in toolset:
+            out.extend(self.get_entity_evidence(query))
+        if "get_table" in toolset:
+            # Prefer explicit table names from query tokens
+            out.extend(self.get_table(query))
+            if "tender" in query.lower() or "مناقصه" in query:
+                out.extend(self.get_table("Tenders"))
+        if "trace_flow" in toolset:
+            ref = trace_ref or self.infer_trace_ref_from_query(query)
+            trace = self.trace_flow(ref)
+            chains = trace.get("chains") or []
+            if not chains and (trace.get("steps") or trace.get("chain")):
+                chains = [{"steps": trace.get("steps") or trace.get("chain") or []}]
+            for chain in chains:
+                for step in chain.get("steps") or []:
+                    if not isinstance(step, dict):
+                        continue
+                    fpath = step.get("file_path") or ""
+                    symbol = step.get("title") or step.get("id") or step.get("label") or ""
+                    ev = self._as_evidence(
+                        tool="trace_flow",
+                        file_path=fpath or step.get("path") or "(graph)",
+                        symbol=symbol,
+                        id=step.get("id") or symbol,
+                        evidence=step.get("summary")
+                        or f"{step.get('node_type', '')} {symbol}".strip(),
+                        extra={"trace_ref": ref, "node_type": step.get("node_type")},
+                    )
+                    if ev:
+                        out.append(ev)
+
+        # Deduplicate by (tool, id, file_path)
+        seen = set()
+        unique: List[Dict[str, Any]] = []
+        for e in out:
+            key = (e.get("tool"), e.get("id"), e.get("file_path"))
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(e)
+        return unique
 
     def format_backend_markdown(self, hits: List[Dict[str, Any]]) -> str:
         """Build a cited Markdown section for backend hits."""
