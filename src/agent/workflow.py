@@ -203,6 +203,27 @@ class Code2GuideWorkflow:
             + f"indexed={index_info.get('indexed_count')} from_store={from_store}"
             + f"; backend_hits={len(backend_hits)} backend_query={state.is_backend_query}"
         )
+        
+        # Evidence-rescue: unknown intent + strong route/form hits → ux
+        plan = state.query_plan or {}
+        if isinstance(plan, dict) and plan.get("intent") == "unknown":
+            from src.agent.planner import QueryPlan
+
+            qp = QueryPlan(**plan) if not isinstance(plan, QueryPlan) else plan
+            try:
+                qp = self.planner.rescue_from_evidence(
+                    qp,
+                    routes_found=len(state.identified_routes or []),
+                    forms_found=len(state.discovered_forms or []),
+                    hybrid_hits=len(state.hybrid_hits or []),
+                    label_hits=len(getattr(state, "extracted_breadcrumbs", None) or []),
+                )
+                state.query_plan = qp.model_dump() if hasattr(qp, "model_dump") else qp.dict()
+                if qp.intent == "ux":
+                    state.steps_taken.append("Rescued intent unknown→ux via route/form evidence")
+            except Exception:
+                pass
+
         return dump_model(state)
 
     def node_search_labels(self, state: AgentState) -> Dict[str, Any]:
@@ -413,6 +434,27 @@ class Code2GuideWorkflow:
             f"Loaded forms via {source}: {len(inspected_comps)} components, "
             f"{len(discovered_forms)} forms, {len(validation_notes)} validation notes"
         )
+
+        # Evidence-rescue after forms/labels discovered
+        plan = state.query_plan or {}
+        if isinstance(plan, dict) and plan.get("intent") == "unknown":
+            from src.agent.planner import QueryPlan
+
+            qp = QueryPlan(**plan) if not isinstance(plan, QueryPlan) else plan
+            try:
+                qp = self.planner.rescue_from_evidence(
+                    qp,
+                    routes_found=len(state.identified_routes or []),
+                    forms_found=len(state.discovered_forms or []),
+                    hybrid_hits=len(state.hybrid_hits or []),
+                    label_hits=len(getattr(state, "extracted_breadcrumbs", None) or []),
+                )
+                state.query_plan = qp.model_dump() if hasattr(qp, "model_dump") else qp.dict()
+                if qp.intent == "ux":
+                    state.steps_taken.append("Rescued intent unknown→ux via form/label evidence")
+            except Exception:
+                pass
+
         return dump_model(state)
 
     def node_gather_evidence(self, state: AgentState) -> Dict[str, Any]:

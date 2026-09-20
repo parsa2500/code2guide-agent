@@ -24,9 +24,16 @@ class QueryPlan(BaseModel):
     skip_ux_template: bool = False
 
 
-UX_HINTS = (
+# HOW-only words: alone must NOT force intent=ux (e.g. «فردا هوا چطوره؟»).
+HOW_WORDS = (
     "چگونه",
     "چطور",
+    "کجا",
+    "how to",
+)
+
+# Domain / org / form UX hints (no bare HOW words).
+UX_DOMAIN_HINTS = (
     "ثبت",
     "مسیر",
     "فرم",
@@ -36,9 +43,68 @@ UX_HINTS = (
     "منو",
     "بردکرامب",
     "ux",
-    "how to",
+    # organizational / panel synonyms (ExternalService-style)
+    "تنظیمات",
+    "پروفایل",
+    "داشبورد",
+    "شرکت",
+    "شرکت‌ها",
+    "توکن",
+    "پرداخت",
+    "لاگ",
+    "لاگ‌ها",
+    "دانش",
+    "پایگاه دانش",
+    "خروجی",
+    "گزارش",
+    "اعلان",
+    "بسته",
+    "مدیریت",
+    "باز کنم",
+    "ببینم",
+    "settings",
+    "dashboard",
+    "profile",
+    "token",
+    "payment",
+    "logs",
     "navigate",
 )
+
+# Context required when a HOW word is present.
+UX_HOW_CONTEXT = (
+    "فرم",
+    "صفحه",
+    "دکمه",
+    "منو",
+    "مسیر",
+    "ثبت",
+    "راهنما",
+    "بردکرامب",
+    "تنظیمات",
+    "پروفایل",
+    "داشبورد",
+    "شرکت",
+    "توکن",
+    "پرداخت",
+    "لاگ",
+    "دانش",
+    "گزارش",
+    "اعلان",
+    "بسته",
+    "مدیریت",
+    "settings",
+    "dashboard",
+    "profile",
+    "token",
+    "payment",
+    "logs",
+    "navigate",
+    "ux",
+)
+
+# Back-compat alias: domain hints only (tests / callers may still import UX_HINTS).
+UX_HINTS = UX_DOMAIN_HINTS
 
 API_HINTS = (
     "api",
@@ -76,7 +142,10 @@ class QueryPlanner:
 
         is_flow = Code2GuideToolbox.is_flow_query(q)
         is_backend = Code2GuideToolbox.is_backend_query(q)
-        is_ux = any(h in q_lower for h in UX_HINTS)
+        has_how = any(h in q_lower for h in HOW_WORDS)
+        has_domain = any(h in q_lower for h in UX_DOMAIN_HINTS)
+        has_how_ctx = any(h in q_lower for h in UX_HOW_CONTEXT)
+        is_ux = has_domain or (has_how and has_how_ctx)
         is_api = any(h in q_lower for h in API_HINTS) or (
             is_backend and any(h in q_lower for h in ("api", "endpoint", "controller", "کنترلر", "سرویس", "service"))
         )
@@ -143,4 +212,37 @@ class QueryPlanner:
             trace_ref=trace_ref,
             skip_ast=skip_ast,
             skip_ux_template=skip_ux,
+        )
+
+    def rescue_from_evidence(
+        self,
+        plan: QueryPlan,
+        *,
+        routes_found: int = 0,
+        forms_found: int = 0,
+        hybrid_hits: int = 0,
+        label_hits: int = 0,
+    ) -> QueryPlan:
+        """If intent was unknown but search found strong UX anchors, upgrade to ux."""
+        if plan.intent != "unknown":
+            return plan
+        strong = (
+            (routes_found >= 1)
+            or (forms_found >= 1)
+            or (label_hits >= 3)
+            or (hybrid_hits >= 5)
+        )
+        if not strong:
+            return plan
+        tools = list(plan.tools or [])
+        for t in ("search_code", "get_route"):
+            if t not in tools:
+                tools.append(t)
+        return plan.model_copy(
+            update={
+                "intent": "ux",
+                "tools": tools,
+                "skip_ast": False,
+                "skip_ux_template": False,
+            }
         )
