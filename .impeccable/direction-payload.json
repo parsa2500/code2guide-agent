@@ -1,0 +1,74 @@
+{
+  "title": "جهت بصری Code2Guide",
+  "question": "رول به تابلوی پرواز (FIDS) افتاد. همین را نگه دار، یکی از جایگزین‌ها را بگیر، یا دوباره بچرخان.",
+  "options": [
+    {
+      "id": "assigned",
+      "label": "تابلوی پرواز FIDS",
+      "kicker": "THE ROLL",
+      "lineage": "airport departure boards / FIDS",
+      "thesis": "ایندکس، مخاطب و راهنما مثل ردیف‌های یک تابلوی پرواز خوانده می‌شوند — نه مثل چت.",
+      "palette": ["#0b1220", "#f4f1e8", "#f5c518", "#3dd6c6"],
+      "materials": ["matte LED matrix", "split-flap rows", "amber status LEDs"],
+      "viewport": "نوار وضعیت ایندکس بالا؛ سوئیچ مخاطب مثل ستون مقصد؛ پرسش و خروجی راهنما به‌عنوان ردیف انتخاب‌شدهٔ تابلو.",
+      "risk": "اگر بیش از حد «گیم‌دار» شود، حس ابزار سازمانی از بین می‌رود.",
+      "sketch": ".impeccable/sketches/assigned.webp"
+    },
+    {
+      "id": "challenger-metro",
+      "label": "کاشی تایپوگرافی مترو",
+      "kicker": "CHALLENGER",
+      "lineage": "Metro typographic tiles",
+      "thesis": "دو مخاطب دو کاشی غول‌پیکر هستند؛ خود تایپ، رابط است.",
+      "palette": ["#000000", "#00aeef", "#ffffff", "#ff0097"],
+      "materials": ["flat color fields", "cropped giant lowercase", "zero chrome"],
+      "viewport": "پانورامای کاشی: فنی / کاربرنهایی / ایندکس؛ راهنما داخل کاشی باز می‌شود.",
+      "risk": "ممکن است برای اپراتور سازمانی بیش از حد مصرف‌کننده به‌نظر برسد.",
+      "case": "روی شفافیت محصول برنده است (سوئیچ مخاطب واضح)؛ روی همذات‌پنداری سازمانی به FIDS می‌بازد.",
+      "sketch": ".impeccable/sketches/challenger-metro.webp",
+      "hero": "https://impeccable.style/worlds/cards/digital-design-canon-metro-typographic-tiles-hero.webp",
+      "board": "https://impeccable.style/worlds/cards/digital-design-canon-metro-typographic-tiles.webp"
+    },
+    {
+      "id": "challenger-scope",
+      "label": "اسکوپ سیگنال",
+      "kicker": "CHALLENGER",
+      "lineage": "CRT oscilloscope signal bench",
+      "thesis": "پرسش پروب است؛ راهنما موج قفل‌شده روی گره‌تیکول.",
+      "palette": ["#07140c", "#33ff66", "#9aa39a", "#ffb000"],
+      "materials": ["phosphor glass", "etched graticule", "detented knobs"],
+      "viewport": "یک صفحهٔ اندازه‌گیری: کانال مخاطب، تایم‌بیس ایندکس، تریگر پرسش، موج راهنما.",
+      "risk": "خواندن راهنمای فارسی روی فسفر سبز سخت می‌شود.",
+      "case": "برای نیمه‌فنی همذات‌پنداری قوی؛ برای کاربرنهایی و وضوح راهنما به FIDS می‌بازد.",
+      "sketch": ".impeccable/sketches/challenger-scope.webp",
+      "hero": "https://impeccable.style/worlds/cards/scientific-notation-oscilloscope-signal-bench-hero.webp",
+      "board": "https://impeccable.style/worlds/cards/scientific-notation-oscilloscope-signal-bench.webp"
+    },
+    {
+      "id": "challenger-folio",
+      "label": "فولیوی گیاه‌شناسی",
+      "kicker": "CHALLENGER",
+      "lineage": "botanical folio season plates",
+      "thesis": "ایندکس → پرسش → راهنما مثل مراحل رشد روی یک خط پایه.",
+      "palette": ["#f3ead8", "#2f5d3a", "#c43b2c", "#5c5346"],
+      "materials": ["cream plates", "hairline sepia rules", "engraved labels"],
+      "viewport": "نوار مراحل ثابت؛ صفحهٔ راهنما زیر همان مقیاس ثبت‌شده.",
+      "risk": "کرم و ادیتوریال نزدیک به پیش‌فرض‌های AI می‌شود.",
+      "case": "مراحل گردش کار را خوب می‌چسباند؛ صحنهٔ اپراتور سازمانی را نسبت به FIDS ضعیف‌تر حمل می‌کند.",
+      "sketch": ".impeccable/sketches/challenger-folio.webp",
+      "hero": "https://impeccable.style/worlds/cards/editorial-sequence-montage-botanical-folio-season-hero.webp",
+      "board": "https://impeccable.style/worlds/cards/editorial-sequence-montage-botanical-folio-season.webp"
+    }
+  ],
+  "reroll": true,
+  "canon": true,
+  "canonCard": {
+    "label": "استاندارد دسته",
+    "thesis": "شِل آشنای ابزار پرسش‌وپاسخ کد، با اجرای بی‌نقص.",
+    "viewport": "سایدبار ابزار + ناحیهٔ پرسش + پنل Markdown؛ بدون استعارهٔ خاص.",
+    "sketch": ".impeccable/sketches/canon.webp",
+    "palette": ["#f8fafc", "#0f172a", "#2563eb", "#e2e8f0"],
+    "materials": ["flat panels", "system sans", "standard form chrome"]
+  },
+  "steer": true
+}

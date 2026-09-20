@@ -42,6 +42,12 @@ coverage.xml
 .env.local
 *.local
 
+# Frontend
+frontend/node_modules/
+frontend/dist/
+.impeccable/sketches/
+.impeccable-schema.json
+
 # IDE & Editors
 .vscode/
 .idea/
@@ -55,3 +61,5 @@ qdrant_storage/
 fastembed_cache/
 workspace_logs/
 *.log
+
+frontend/*.tsbuildinfo
