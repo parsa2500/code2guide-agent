@@ -11,7 +11,7 @@ from src.core.normalizer import default_normalizer
 from src.parsers.ast_visitor import DiscoveredForm, ComponentInspection
 from src.parsers.route_extractor import RouteNode
 from src.agent.state import AgentState
-from src.agent.abstain import apply_abstain_to_state
+from src.agent.abstain import apply_abstain_to_state, explicit_route_or_label_hit
 from src.agent.tools import Code2GuideToolbox, dump_model
 from src.agent.prompts import (
     SYSTEM_PROMPT,
@@ -213,10 +213,8 @@ class Code2GuideWorkflow:
             try:
                 qp = self.planner.rescue_from_evidence(
                     qp,
-                    routes_found=len(state.identified_routes or []),
-                    forms_found=len(state.discovered_forms or []),
-                    hybrid_hits=len(state.hybrid_hits or []),
-                    label_hits=len(getattr(state, "extracted_breadcrumbs", None) or []),
+                    route_hit=explicit_route_or_label_hit(state),
+                    label_hit=explicit_route_or_label_hit(state),
                 )
                 state.query_plan = qp.model_dump() if hasattr(qp, "model_dump") else qp.dict()
                 if qp.intent == "ux":
@@ -444,10 +442,8 @@ class Code2GuideWorkflow:
             try:
                 qp = self.planner.rescue_from_evidence(
                     qp,
-                    routes_found=len(state.identified_routes or []),
-                    forms_found=len(state.discovered_forms or []),
-                    hybrid_hits=len(state.hybrid_hits or []),
-                    label_hits=len(getattr(state, "extracted_breadcrumbs", None) or []),
+                    route_hit=explicit_route_or_label_hit(state),
+                    label_hit=explicit_route_or_label_hit(state),
                 )
                 state.query_plan = qp.model_dump() if hasattr(qp, "model_dump") else qp.dict()
                 if qp.intent == "ux":

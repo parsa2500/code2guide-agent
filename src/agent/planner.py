@@ -218,21 +218,21 @@ class QueryPlanner:
         self,
         plan: QueryPlan,
         *,
+        route_hit: bool = False,
+        label_hit: bool = False,
+        # legacy count kwargs ignored for strength (kept for call-site compat)
         routes_found: int = 0,
         forms_found: int = 0,
         hybrid_hits: int = 0,
         label_hits: int = 0,
     ) -> QueryPlan:
-        """If intent was unknown but search found strong UX anchors, upgrade to ux."""
+        """Upgrade unknown→ux only on explicit route/label token hit (not hybrid/forms/maps_to)."""
         if plan.intent != "unknown":
             return plan
-        strong = (
-            (routes_found >= 1)
-            or (forms_found >= 1)
-            or (label_hits >= 3)
-            or (hybrid_hits >= 5)
-        )
+        # Prefer explicit booleans; fall back to counts only if booleans unused by old callers
+        strong = bool(route_hit) or bool(label_hit)
         if not strong:
+            # Counts alone are NOT enough anymore (basket-2 guard).
             return plan
         tools = list(plan.tools or [])
         for t in ("search_code", "get_route"):

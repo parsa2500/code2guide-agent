@@ -136,3 +136,13 @@ def test_apply_rewrites_guide():
 
 def test_tau_unchanged():
     assert DEFAULT_TAU == 0.75
+
+def test_ambiguous_without_route_label_hit_abstains():
+    from src.agent.abstain import evaluate_abstain, REASON_AMBIGUOUS_QUERY
+    from src.agent.state import AgentState
+    s = AgentState(query="اتصال LDAP به سامانه", workspace_path="sample_workspace")
+    s.query_plan = {"intent": "ux"}
+    s.identified_routes = [{"path": "/tenders", "title": "مناقصه"}]
+    d = evaluate_abstain(s)
+    assert d.abstain is True
+    assert REASON_AMBIGUOUS_QUERY in d.reason_codes

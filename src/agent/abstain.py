@@ -22,6 +22,7 @@ REASON_UNKNOWN_INTENT = "unknown_intent"
 REASON_WEAK_FE_BE = "weak_fe_be_link"
 REASON_NO_EVIDENCE = "no_evidence"
 REASON_NO_ROUTE = "no_route"
+REASON_AMBIGUOUS_QUERY = "ambiguous_query"
 
 _STOPWORDS = {
     "چگونه",
@@ -193,6 +194,60 @@ def _has_useful_grounding(state: Any, *, min_hybrid_score: float = 0.35) -> bool
     return False
 
 
+
+# Tokens that must appear in route/label when present in the query (basket-2 / OOS markers).
+_STRICT_MARKERS = {
+    "ldap", "sms", "excel", "xlsx", "اکسل", "بیتکوین", "bitcoin", "btc",
+    "هوا", "آب", "weather", "otp", "sso", "oauth", "saml", "kerberos",
+}
+
+
+def _normalize_token(tok: str) -> str:
+    t = (tok or "").lower().replace("\u200c", "").replace("ی", "ی").replace("ک", "ک")
+    # collapse zero-width / arabic yeh variants already partly handled
+    t = t.replace("\u200c", "").replace("‌", "")
+    return t
+
+
+def explicit_route_or_label_hit(state: Any) -> bool:
+    """True when a route or breadcrumb/label shares a discriminative query token.
+
+    If the query contains a strict OOS marker (ldap/sms/excel/...), that marker
+    must appear in the evidence blob — a soft overlap on a generic app noun is not enough.
+    """
+    q_tokens = {_normalize_token(t) for t in _query_tokens(state)}
+    q_tokens = {t for t in q_tokens if t}
+    if not q_tokens:
+        return False
+
+    blobs: list[str] = []
+    for r in getattr(state, "identified_routes", None) or []:
+        blobs.append(_blob_from_obj(r, ("path", "title", "label", "component_name", "file_path")))
+    crumbs = getattr(state, "extracted_breadcrumbs", None) or []
+    for c in crumbs:
+        if isinstance(c, str):
+            blobs.append(c)
+        else:
+            blobs.append(_blob_from_obj(c, ("label", "title", "path", "text", "name")))
+    # label matches collected on state if any
+    for lab in getattr(state, "label_matches", None) or []:
+        blobs.append(_blob_from_obj(lab, ("label", "text", "title", "value", "path")) if not isinstance(lab, str) else lab)
+
+    if not blobs:
+        return False
+
+    evidence_tokens: set[str] = set()
+    for b in blobs:
+        evidence_tokens |= {_normalize_token(t) for t in _token_set(b)}
+
+    strict_in_q = {t for t in q_tokens if t in _STRICT_MARKERS or (t.isascii() and t.isalpha() and len(t) >= 3)}
+    if strict_in_q:
+        return bool(strict_in_q & evidence_tokens)
+
+    return bool(q_tokens & evidence_tokens)
+
+
+
 def _maps_to_confidences(store: Any) -> List[float]:
     if store is None:
         return []
@@ -301,6 +356,17 @@ def evaluate_abstain(
     if REASON_NO_EVIDENCE in uniq:
         abstain = True
         confidence = min(confidence, 0.1)
+    if REASON_AMBIGUOUS_QUERY in uniq:
+        abstain = True
+        confidence = min(confidence, 0.2)
+
+
+    # Basket-2: answering needs explicit route/label hit (not hybrid-only / not soft keyword).
+    if intent in ("ux", "flow", "mixed") and not explicit_route_or_label_hit(state):
+        if REASON_AMBIGUOUS_QUERY not in uniq:
+            uniq.append(REASON_AMBIGUOUS_QUERY)
+        confidence = min(confidence if scores else 0.85, 0.2)
+        abstain = True
 
     # Force: regardless of other score paths, no useful grounding → abstain.
     if not _has_useful_grounding(state):
