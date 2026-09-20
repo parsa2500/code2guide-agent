@@ -320,9 +320,12 @@ def scan_workspace(payload: ScanWorkspaceRequest):
 
 @router.get("/health", summary="Service Health Check")
 def health_check():
-    """Health check endpoint."""
+    """Health check endpoint for service + app shell DB path."""
+    from pathlib import Path
+
     return {
-        "status": "healthy",
+        "status": "ok",
+        "app_db": Path(settings.app_db_path).parent.exists(),
         "app_name": settings.app_name,
-        "environment": settings.app_env
+        "environment": settings.app_env,
     }

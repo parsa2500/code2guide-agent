@@ -52,6 +52,10 @@ class Settings(BaseSettings):
         default=".code2guide/index",
         description="Directory for per-workspace SQLite knowledge graph DBs",
     )
+    app_db_path: str = Field(
+        default=".code2guide/app.db",
+        description="SQLite path for app shell metadata (not knowledge graph)",
+    )
     ast_inspect_limit: int = Field(
         default=0,
         description=(

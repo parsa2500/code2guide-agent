@@ -2,6 +2,8 @@
 
 This document lists the backend APIs the new Code2Guide shell will need once mock UI is wired. Nothing below is implemented yet except the existing ask/index endpoints used by `/ask`.
 
+**Full backend design (folders, entities, ORM DDL, DTOs, services, DoD):** see [`app-backend-architecture.md`](./app-backend-architecture.md).
+
 Base path assumption: `/api/v1`
 
 ---

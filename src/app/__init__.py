@@ -1,0 +1,1 @@
+"""App shell domain package."""

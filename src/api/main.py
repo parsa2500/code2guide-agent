@@ -1,14 +1,32 @@
 """FastAPI Entrypoint for Code2Guide Agent Service."""
 
+from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from src.core.config import settings
+from src.app.exceptions import AppError
 from src.api.routes import router
+from src.api.schemas.common import ErrorBody
+from src.api.shell import shell_router
+from src.core.config import settings
+from src.db.base import reset_engine
+from src.db.init_db import init_db
+from src.db.session import get_session_factory, reset_session_factory
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    Path(settings.app_db_path).parent.mkdir(parents=True, exist_ok=True)
+    init_db()
+    get_session_factory(force_new=True)
+    yield
+    reset_session_factory()
+    reset_engine()
+
 
 # Prefer the React+Vite FIDS shell; fall back to legacy static HTML.
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -20,6 +38,7 @@ app = FastAPI(
     title="Code2Guide Agent API",
     description="Intelligent UX journey extractor & Persian assistant for enterprise codebases",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -30,7 +49,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.exception_handler(AppError)
+async def app_error_handler(_request: Request, exc: AppError) -> JSONResponse:
+    body = ErrorBody(code=exc.code, message=exc.message, detail=exc.detail)
+    return JSONResponse(status_code=exc.status_code, content=body.model_dump())
+
+
 app.include_router(router)
+app.include_router(shell_router)
 
 if UI_DIR.is_dir():
     assets = UI_DIR / "assets"

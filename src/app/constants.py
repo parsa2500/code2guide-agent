@@ -1,0 +1,21 @@
+"""App shell constants."""
+
+APP_DB_DIR = ".code2guide"
+APP_DB_FILENAME = "app.db"
+API_V1_PREFIX = "/api/v1"
+
+ID_PREFIX_WORKSPACE = "ws"
+ID_PREFIX_UPDATE_JOB = "upd"
+ID_PREFIX_ACTIVITY_LOG = "log"
+ID_PREFIX_CHATBOT = "bot"
+ID_PREFIX_MESSAGE = "msg"
+
+DEFAULT_AGENT = "guide-agent"
+DEFAULT_CHATBOT_USER_ID = "bot_user"
+DEFAULT_CHATBOT_USER_NAME = "راهنمای کاربر"
+DEFAULT_CHATBOT_TECH_ID = "bot_tech"
+DEFAULT_CHATBOT_TECH_NAME = "راهنمای فنی"
+
+DEFAULT_PAGE_LIMIT = 50
+MAX_PAGE_LIMIT = 200
+DEFAULT_MESSAGE_LIMIT = 100
