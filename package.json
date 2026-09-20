@@ -1,0 +1,10 @@
+{
+  "name": "code2guide-agent",
+  "private": true,
+  "scripts": {
+    "up": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/dev-up.ps1",
+    "down": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/dev-down.ps1",
+    "up:no-qdrant": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/dev-up.ps1 -SkipQdrant",
+    "down:keep-qdrant": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/dev-down.ps1 -KeepQdrant"
+  }
+}

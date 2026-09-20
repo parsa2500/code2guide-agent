@@ -14,6 +14,15 @@ npm install
 npm run dev
 ```
 
+Or from repo root (Qdrant + API + UI together):
+
+```bash
+npm run up      # or: .\scripts\dev-up.ps1
+npm run down    # or: .\scripts\dev-down.ps1
+```
+
+In Cursor/VS Code: **Terminal → Run Task… → `Code2Guide: Up` / `Code2Guide: Down`**.
+
 Open http://127.0.0.1:5173
 
 ## Production UI via FastAPI
