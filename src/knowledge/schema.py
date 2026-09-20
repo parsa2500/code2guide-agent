@@ -22,6 +22,7 @@ class NodeType(str, Enum):
     FORM_FIELD = "form_field"
     UI_BUTTON = "ui_button"
     I18N_STRING = "i18n_string"
+    UI_TEXT = "ui_text"
     # Phase 2 stubs
     API_ENDPOINT = "api_endpoint"
     SERVICE = "service"
@@ -37,6 +38,7 @@ class EdgeType(str, Enum):
     CONTAINS_FIELD = "contains_field"
     HAS_BUTTON = "has_button"
     USES_I18N = "uses_i18n"
+    CONTAINS_TEXT = "contains_text"
     # Phase 2/3
     CALLS_API = "calls_api"
     HANDLED_BY = "handled_by"
@@ -98,3 +100,15 @@ class I18nPayload(BaseModel):
     key: str = ""
     locale: str = "fa"
     value: str = ""
+
+
+class UiTextPayload(BaseModel):
+    """Visible UI copy stored as a ui_text graph node."""
+
+    kind: str = Field(
+        default="static",
+        description="heading | table_header | list_item | tab | static | script_ui | error",
+    )
+    text: str = ""
+    line_number: int = 1
+    context: Optional[str] = None

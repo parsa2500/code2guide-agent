@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import Modal from "./Modal";
-import type { Workspace, WorkspaceInput } from "../mock/workspaceStore";
+import type { WorkspaceInput, WorkspaceOut } from "../api/workspaces";
 
 type Props = {
   open: boolean;
   mode: "create" | "edit";
-  initial?: Workspace | null;
+  initial?: WorkspaceOut | null;
+  busy?: boolean;
   onClose: () => void;
   onSubmit: (input: WorkspaceInput) => void;
 };
@@ -15,6 +16,7 @@ export default function WorkspaceFormModal({
   open,
   mode,
   initial,
+  busy = false,
   onClose,
   onSubmit,
 }: Props) {
@@ -31,8 +33,8 @@ export default function WorkspaceFormModal({
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!name.trim() || !path.trim()) return;
-    onSubmit({ name, path, description });
+    if (!name.trim() || !path.trim() || busy) return;
+    onSubmit({ name: name.trim(), path: path.trim(), description: description.trim() });
   }
 
   return (
@@ -42,11 +44,11 @@ export default function WorkspaceFormModal({
       title={mode === "create" ? "ساخت workspace جدید" : "ویرایش workspace"}
       footer={
         <>
-          <button type="button" className="btn" onClick={onClose}>
+          <button type="button" className="btn" onClick={onClose} disabled={busy}>
             انصراف
           </button>
-          <button type="submit" form="ws-form" className="btn btn-primary">
-            {mode === "create" ? "ایجاد" : "ذخیره"}
+          <button type="submit" form="ws-form" className="btn btn-primary" disabled={busy}>
+            {busy ? "…" : mode === "create" ? "ایجاد" : "ذخیره"}
           </button>
         </>
       }
@@ -62,6 +64,7 @@ export default function WorkspaceFormModal({
             onChange={(e) => setName(e.target.value)}
             required
             placeholder="مثلاً پنل مناقصات"
+            disabled={busy}
           />
         </div>
         <div className="flap">
@@ -74,8 +77,9 @@ export default function WorkspaceFormModal({
             onChange={(e) => setPath(e.target.value)}
             required
             dir="ltr"
-            placeholder="sample_workspace"
+            placeholder="C:/path/to/project یا sample_workspace"
             spellCheck={false}
+            disabled={busy}
           />
         </div>
         <div className="flap">
@@ -88,6 +92,7 @@ export default function WorkspaceFormModal({
             onChange={(e) => setDescription(e.target.value)}
             rows={3}
             placeholder="توضیح کوتاه درباره این workspace"
+            disabled={busy}
           />
         </div>
       </form>

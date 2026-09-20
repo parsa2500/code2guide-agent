@@ -93,6 +93,7 @@ class WorkspaceIndexManager:
                     form_fields=int(prev.get("form_fields") or 0),
                     ui_buttons=int(prev.get("ui_buttons") or 0),
                     i18n_strings=int(prev.get("i18n_strings") or 0),
+                    ui_texts=int(prev.get("ui_texts") or 0),
                     edges=int(prev.get("edges") or 0),
                     indexed_count=int(prev.get("indexed_count") or 0),
                     use_vector=bool(self.hybrid_indexer.use_vector),

@@ -100,6 +100,8 @@ class JSXASTVisitor:
 
         fields: List[UIField] = []
         buttons: List[UIButton] = []
+        label_by_for: Dict[str, str] = {}
+        orphan_labels: List[str] = []
 
         def traverse(node):
             if node.type in ("jsx_element", "jsx_self_closing_element"):
@@ -130,6 +132,15 @@ class JSXASTVisitor:
                             line_number=line_num
                         )
                     )
+                elif tag_name in self.LABEL_TAGS:
+                    inner_text = self._extract_inner_text(node) or props.get("children", "") or ""
+                    normalized_label = self.normalizer.normalize(str(inner_text))
+                    for_name = props.get("htmlFor") or props.get("for") or props.get("id")
+                    if normalized_label:
+                        if for_name:
+                            label_by_for[str(for_name)] = normalized_label
+                        else:
+                            orphan_labels.append(normalized_label)
                 elif tag_name in self.INPUT_TAGS or tag_name in self.TEXTAREA_TAGS:
                     req = props.get("required", False) is True or "required" in props
                     fields.append(
@@ -162,6 +173,15 @@ class JSXASTVisitor:
                 traverse(child)
 
         traverse(root)
+
+        # Apply <Label htmlFor=…> text onto matching fields
+        for fld in fields:
+            if fld.label:
+                continue
+            if fld.name and fld.name in label_by_for:
+                fld.label = label_by_for[fld.name]
+            elif orphan_labels and not fld.label:
+                fld.label = orphan_labels.pop(0)
 
         # Build form container
         form = DiscoveredForm(
@@ -336,6 +356,33 @@ class JSXASTVisitor:
                     line_number=get_line_number(m.start())
                 )
             )
+
+        # <Label htmlFor="…">متن</Label> / <label for="…">
+        label_pattern = re.compile(
+            r'<(?P<tag>label|Label|FormLabel|InputLabel)\b(?P<attrs>[^>]*)>(?P<body>.*?)</(?P=tag)>',
+            re.IGNORECASE | re.DOTALL,
+        )
+        label_by_for: Dict[str, str] = {}
+        orphan_labels: List[str] = []
+        for m in label_pattern.finditer(code):
+            attrs = parse_attrs(m.group("attrs"))
+            clean_text = re.sub(r'<[^>]+>', '', m.group("body")).strip()
+            if not clean_text:
+                continue
+            clean_text = self.normalizer.normalize(clean_text)
+            for_name = attrs.get("htmlFor") or attrs.get("for") or attrs.get("id")
+            if for_name:
+                label_by_for[str(for_name)] = clean_text
+            else:
+                orphan_labels.append(clean_text)
+
+        for fld in fields:
+            if fld.label:
+                continue
+            if fld.name and fld.name in label_by_for:
+                fld.label = label_by_for[fld.name]
+            elif orphan_labels:
+                fld.label = orphan_labels.pop(0)
 
         comp_name = self._guess_component_name(code, file_path)
 

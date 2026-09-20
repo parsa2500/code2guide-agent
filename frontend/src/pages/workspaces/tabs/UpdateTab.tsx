@@ -1,28 +1,70 @@
-import { useState } from "react";
-import type { Workspace } from "../../../mock/workspaceStore";
-import { formatFaDate, runMockUpdate } from "../../../mock/workspaceStore";
+import { useCallback, useEffect, useState } from "react";
+import type { UpdateJob, WorkspaceDetailOut } from "../../../api/workspaces";
+import {
+  getWorkspace,
+  listUpdates,
+  pollUpdateJob,
+  startUpdate,
+} from "../../../api/workspaces";
+import { formatFaDate } from "../../../utils/format";
 
 type Props = {
-  workspace: Workspace;
-  onChange: (ws: Workspace) => void;
+  workspace: WorkspaceDetailOut;
+  onWorkspaceChange: (ws: WorkspaceDetailOut) => void;
 };
 
-export default function UpdateTab({ workspace, onChange }: Props) {
+export default function UpdateTab({ workspace, onWorkspaceChange }: Props) {
+  const [jobs, setJobs] = useState<UpdateJob[]>([]);
   const [busy, setBusy] = useState(false);
-  const [expanded, setExpanded] = useState<string | null>(
-    workspace.updateLogs[0]?.id ?? null,
-  );
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(null);
 
-  function handleUpdate() {
+  const refreshJobs = useCallback(async () => {
+    setError(null);
+    try {
+      const data = await listUpdates(workspace.id);
+      setJobs(data.items);
+      if (!expanded && data.items[0]) setExpanded(data.items[0].id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [workspace.id, expanded]);
+
+  useEffect(() => {
+    void refreshJobs();
+  }, [workspace.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function handleUpdate() {
     setBusy(true);
-    window.setTimeout(() => {
-      const next = runMockUpdate(workspace.id);
-      if (next) {
-        onChange(next);
-        setExpanded(next.updateLogs[0]?.id ?? null);
+    setError(null);
+    try {
+      const accepted = await startUpdate(workspace.id, { rebuild: true, scope: "full" });
+      setExpanded(accepted.job_id);
+      onWorkspaceChange({ ...workspace, status: "indexing" });
+
+      const finished = await pollUpdateJob(workspace.id, accepted.job_id);
+      await refreshJobs();
+
+      const detail = await getWorkspace(workspace.id);
+      onWorkspaceChange(detail);
+
+      if (finished.status === "failed") {
+        setError(finished.summary || finished.detail || "آپدیت ناموفق بود");
       }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      try {
+        const detail = await getWorkspace(workspace.id);
+        onWorkspaceChange(detail);
+      } catch {
+        /* ignore */
+      }
+    } finally {
       setBusy(false);
-    }, 600);
+    }
   }
 
   return (
@@ -31,24 +73,32 @@ export default function UpdateTab({ workspace, onChange }: Props) {
         <button
           type="button"
           className="btn btn-primary"
-          onClick={handleUpdate}
-          disabled={busy}
+          onClick={() => void handleUpdate()}
+          disabled={busy || workspace.status === "indexing"}
         >
-          {busy ? "در حال آپدیت…" : "آپدیت workspace"}
+          {busy || workspace.status === "indexing" ? "در حال آپدیت…" : "آپدیت workspace"}
         </button>
-        <span className="status-line">آپدیت mock — بدون اتصال به بک</span>
+        <span className="status-line">وضعیت: {workspace.status}</span>
       </div>
+
+      {error ? (
+        <p className="empty-hint" data-tone="error" role="alert">
+          {error}
+        </p>
+      ) : null}
 
       <div className="panel-head">
         <span>Update logs</span>
-        <span>{workspace.updateLogs.length}</span>
+        <span>{loading ? "…" : jobs.length}</span>
       </div>
 
-      {workspace.updateLogs.length === 0 ? (
+      {loading ? (
+        <p className="empty-hint">در حال بارگذاری…</p>
+      ) : jobs.length === 0 ? (
         <p className="empty-hint">هنوز آپدیتی ثبت نشده.</p>
       ) : (
         <ul className="log-list">
-          {workspace.updateLogs.map((log) => {
+          {jobs.map((log) => {
             const open = expanded === log.id;
             return (
               <li key={log.id} className="log-item">
@@ -59,12 +109,12 @@ export default function UpdateTab({ workspace, onChange }: Props) {
                   onClick={() => setExpanded(open ? null : log.id)}
                 >
                   <span className={`ws-status status-${log.status}`}>{log.status}</span>
-                  <strong>{log.summary}</strong>
-                  <span className="ws-card-meta">{formatFaDate(log.startedAt)}</span>
+                  <strong>{log.summary || "—"}</strong>
+                  <span className="ws-card-meta">{formatFaDate(log.started_at)}</span>
                 </button>
                 {open ? (
                   <pre className="log-detail" dir="ltr">
-                    {log.detail}
+                    {log.detail || "(بدون جزئیات)"}
                   </pre>
                 ) : null}
               </li>

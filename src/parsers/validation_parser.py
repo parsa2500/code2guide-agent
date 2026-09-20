@@ -16,7 +16,7 @@ class ValidationRule(BaseModel):
     error_message: Optional[str] = None
     min_value: Optional[str] = None
     max_value: Optional[str] = None
-    source: str = Field(default="unknown", description="zod | rhf | yup")
+    source: str = Field(default="unknown", description="zod | rhf | yup | dataannotations")
 
 
 class ValidationParser:
@@ -122,6 +122,47 @@ class ValidationParser:
             )
         return rules
 
+    @staticmethod
+    def extract_dataannotation_rules(code: str) -> Dict[str, ValidationRule]:
+        """Parse [Required(ErrorMessage=\"…\")] and similar DataAnnotations."""
+        rules: Dict[str, ValidationRule] = {}
+        # Attribute then property: [Required(ErrorMessage="…")]\n public string Name { get; set; }
+        pattern = re.compile(
+            r"""\[(?P<attr>Required|StringLength|Range|RegularExpression|EmailAddress|MinLength|MaxLength)"""
+            r"""[^\]]*(?:ErrorMessage\s*=\s*["'](?P<msg>[^"']+)["'])?[^\]]*\]"""
+            r"""\s*(?:public\s+)?(?:virtual\s+)?[\w.<>,\s\[\]]+\s+(?P<name>[A-Za-z_]\w*)\s*\{""",
+            re.MULTILINE | re.DOTALL,
+        )
+        for m in pattern.finditer(code):
+            field_name = m.group("name")
+            attr = m.group("attr")
+            msg = m.group("msg")
+            is_required = attr == "Required"
+            if field_name in rules and not msg:
+                continue
+            rules[field_name] = ValidationRule(
+                field_name=field_name,
+                is_required=is_required or (field_name in rules and rules[field_name].is_required),
+                error_message=msg,
+                source="dataannotations",
+            )
+        # Standalone ErrorMessage captures without property (still useful as notes)
+        for m in re.finditer(
+            r"""ErrorMessage\s*=\s*["'](?P<msg>[^"']+)["']""",
+            code,
+        ):
+            msg = m.group("msg")
+            key = f"_msg_{len(rules)}"
+            if any(r.error_message == msg for r in rules.values()):
+                continue
+            rules[key] = ValidationRule(
+                field_name=key,
+                is_required=True,
+                error_message=msg,
+                source="dataannotations",
+            )
+        return rules
+
     @classmethod
     def extract_all(cls, code: str) -> Dict[str, ValidationRule]:
         merged = cls.extract_zod_rules(code)
@@ -134,6 +175,20 @@ class ValidationParser:
                     merged[name].is_required = True
                 if rule.error_message and not merged[name].error_message:
                     merged[name].error_message = rule.error_message
+        for name, rule in cls.extract_dataannotation_rules(code).items():
+            if name.startswith("_msg_"):
+                # Keep anonymous messages under unique keys
+                merged[name] = rule
+                continue
+            if name not in merged:
+                merged[name] = rule
+            else:
+                if rule.is_required:
+                    merged[name].is_required = True
+                if rule.error_message and not merged[name].error_message:
+                    merged[name].error_message = rule.error_message
+                    if merged[name].source == "unknown":
+                        merged[name].source = rule.source
         return merged
 
     @classmethod

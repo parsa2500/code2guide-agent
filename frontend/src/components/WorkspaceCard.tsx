@@ -1,8 +1,8 @@
-import type { Workspace } from "../mock/workspaceStore";
-import { formatFaDate } from "../mock/workspaceStore";
+import type { WorkspaceOut } from "../api/workspaces";
+import { formatFaDate } from "../utils/format";
 
 type Props = {
-  workspace: Workspace;
+  workspace: WorkspaceOut;
   onOpen: () => void;
   onEdit: () => void;
   onDelete: () => void;
@@ -21,7 +21,7 @@ export default function WorkspaceCard({ workspace, onOpen, onEdit, onDelete }: P
           {workspace.path}
         </p>
         <p className="ws-card-desc">{workspace.description || "بدون توضیح"}</p>
-        <p className="ws-card-meta">به‌روزرسانی: {formatFaDate(workspace.updatedAt)}</p>
+        <p className="ws-card-meta">به‌روزرسانی: {formatFaDate(workspace.updated_at)}</p>
       </button>
       <div className="ws-card-actions">
         <button

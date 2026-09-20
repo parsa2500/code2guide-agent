@@ -210,4 +210,4 @@ Not required for the current mock shell, but expected later:
 | Logs tab | `activityLogs` | `GET …/logs` |
 | Chat tab | `appendChatMessage` | chatbots + messages APIs |
 
-Persistence note: mock UI uses `localStorage` key `c2g.workspaces.v1` until these endpoints exist.
+Persistence note: UI calls live `/api/v1/workspaces*` App Shell APIs (see `frontend/src/api/workspaces.ts`). Local mock store removed.

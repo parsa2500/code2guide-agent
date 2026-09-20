@@ -1,26 +1,81 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { FormEvent } from "react";
-import type { Workspace } from "../../../mock/workspaceStore";
-import { appendChatMessage } from "../../../mock/workspaceStore";
+import type { Chatbot, ChatMessage } from "../../../api/workspaces";
+import { listChatbots, listMessages, sendMessage } from "../../../api/workspaces";
 
 type Props = {
-  workspace: Workspace;
-  onChange: (ws: Workspace) => void;
+  workspaceId: string;
 };
 
-export default function ChatTab({ workspace, onChange }: Props) {
-  const bots = workspace.chatbots;
-  const [activeBotId, setActiveBotId] = useState(bots[0]?.id ?? "");
+export default function ChatTab({ workspaceId }: Props) {
+  const [bots, setBots] = useState<Chatbot[]>([]);
+  const [activeBotId, setActiveBotId] = useState("");
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
   const bot = bots.find((b) => b.id === activeBotId) ?? bots[0];
 
-  function send(e: FormEvent) {
+  const loadBots = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await listChatbots(workspaceId);
+      setBots(data.items);
+      setActiveBotId((prev) => prev || data.items[0]?.id || "");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [workspaceId]);
+
+  const loadMessages = useCallback(
+    async (botId: string) => {
+      if (!botId) {
+        setMessages([]);
+        return;
+      }
+      setError(null);
+      try {
+        const data = await listMessages(workspaceId, botId, { limit: 200 });
+        setMessages(data.items);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    },
+    [workspaceId],
+  );
+
+  useEffect(() => {
+    void loadBots();
+  }, [loadBots]);
+
+  useEffect(() => {
+    if (bot?.id) void loadMessages(bot.id);
+  }, [bot?.id, loadMessages]);
+
+  async function send(e: FormEvent) {
     e.preventDefault();
     const text = draft.trim();
-    if (!text || !bot) return;
-    const next = appendChatMessage(workspace.id, bot.id, text);
-    if (next) onChange(next);
-    setDraft("");
+    if (!text || !bot || sending) return;
+    setSending(true);
+    setError(null);
+    try {
+      const result = await sendMessage(workspaceId, bot.id, text);
+      setMessages((prev) => [...prev, result.user_message, result.assistant_message]);
+      setDraft("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSending(false);
+    }
+  }
+
+  if (loading) {
+    return <p className="empty-hint">در حال بارگذاری چت‌بات‌ها…</p>;
   }
 
   if (!bot) {
@@ -46,28 +101,34 @@ export default function ChatTab({ workspace, onChange }: Props) {
       <div className="chat-panel">
         <div className="panel-head">
           <span>{bot.name}</span>
-          <span>Mock chat</span>
+          <span>{sending ? "در حال پاسخ…" : "آماده"}</span>
         </div>
+        {error ? (
+          <p className="empty-hint" data-tone="error" role="alert">
+            {error}
+          </p>
+        ) : null}
         <div className="chat-messages">
-          {bot.messages.length === 0 ? (
+          {messages.length === 0 ? (
             <p className="empty-hint">هنوز پیامی نیست. چیزی بپرسید.</p>
           ) : (
-            bot.messages.map((m) => (
+            messages.map((m) => (
               <div key={m.id} className={`chat-bubble chat-${m.role}`}>
                 {m.text}
               </div>
             ))
           )}
         </div>
-        <form className="chat-compose" onSubmit={send}>
+        <form className="chat-compose" onSubmit={(e) => void send(e)}>
           <input
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             placeholder="پیام خود را بنویسید…"
             aria-label="پیام"
+            disabled={sending}
           />
-          <button type="submit" className="btn btn-primary">
-            ارسال
+          <button type="submit" className="btn btn-primary" disabled={sending || !draft.trim()}>
+            {sending ? "…" : "ارسال"}
           </button>
         </form>
       </div>

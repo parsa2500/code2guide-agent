@@ -20,6 +20,7 @@ from src.parsers.route_extractor import RouteExtractor, RouteTree, RouteNode
 from src.parsers.alias_resolver import PathAliasResolver
 from src.parsers.i18n_parser import I18nParser
 from src.parsers.validation_parser import ValidationParser, ValidationRule
+from src.parsers.ui_text_extractor import UiTextExtractor
 from src.parsers.openapi_parser import BackendContractExtractor, EndpointRequirement
 from src.knowledge.manager import get_index_manager
 from src.knowledge.schema import NodeType
@@ -52,6 +53,7 @@ class Code2GuideToolbox:
         self.lexical_engine = RipgrepLexicalEngine(self.workspace_path, normalizer=self.normalizer)
         self.ast_visitor = JSXASTVisitor(normalizer=self.normalizer)
         self.razor_visitor = RazorNgFormVisitor(normalizer=self.normalizer)
+        self.ui_text_extractor = UiTextExtractor(normalizer=self.normalizer)
         self.route_extractor = RouteExtractor(normalizer=self.normalizer)
         self.alias_resolver = PathAliasResolver(self.workspace_path)
         self.i18n_parser = I18nParser(self.workspace_path)
@@ -124,6 +126,7 @@ class Code2GuideToolbox:
                     "file_path": file_path,
                     "error": f"File not found: {file_path}",
                     "forms": [],
+                    "ui_texts": [],
                     "validation_rules": [],
                     "validation_notes": [],
                 }
@@ -158,6 +161,10 @@ class Code2GuideToolbox:
             buttons_data = [dump_model(b) for b in inspection.standalone_buttons]
             rules_data = [dump_model(r) for r in validation_rules.values()]
             notes = ValidationParser.as_notes(validation_rules)
+            ui_texts = [
+                dump_model(span)
+                for span in self.ui_text_extractor.extract(prepared, file_path=file_path)
+            ]
 
             return {
                 "file_path": file_path,
@@ -165,6 +172,7 @@ class Code2GuideToolbox:
                 "forms": forms_data,
                 "standalone_fields": fields_data,
                 "standalone_buttons": buttons_data,
+                "ui_texts": ui_texts,
                 "validation_rules": rules_data,
                 "validation_notes": notes,
                 "total_lines": len(lines),
@@ -174,6 +182,7 @@ class Code2GuideToolbox:
                 "file_path": file_path,
                 "error": str(e),
                 "forms": [],
+                "ui_texts": [],
                 "validation_rules": [],
                 "validation_notes": [],
             }

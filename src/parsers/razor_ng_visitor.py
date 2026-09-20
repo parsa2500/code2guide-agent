@@ -66,7 +66,7 @@ class RazorNgFormVisitor:
     def _parse_fields(self, code: str) -> List[UIField]:
         fields: List[UIField] = []
         seen = set()
-        # Match input/select/textarea with ng-model
+        # Match input/select/textarea — prefer ng-model, also accept name/id with clear label
         pattern = re.compile(
             r"<(?P<tag>input|select|textarea|md-input|dx-text-box)(?P<attrs>[^>]*)>",
             re.I | re.DOTALL,
@@ -75,14 +75,16 @@ class RazorNgFormVisitor:
             attrs = m.group("attrs") or ""
             tag = m.group("tag").lower()
             model_m = re.search(r"""ng-model\s*=\s*["']([^"']+)["']""", attrs, re.I)
-            if not model_m:
+            name_m = re.search(r"""(?:name|id)\s*=\s*["']([^"']+)["']""", attrs, re.I)
+            if model_m:
+                model = model_m.group(1).strip()
+                name = model.split(".")[-1] if "." in model else model
+            elif name_m:
+                name = name_m.group(1).strip()
+            else:
                 continue
-            model = model_m.group(1).strip()
-            # model.Name → Name
-            name = model.split(".")[-1] if "." in model else model
             if name in seen:
                 continue
-            seen.add(name)
 
             field_type = "text"
             type_m = re.search(r"""type\s*=\s*["']([^"']+)["']""", attrs, re.I)
@@ -105,6 +107,11 @@ class RazorNgFormVisitor:
             line_number = code[: m.start()].count("\n") + 1
             label = self._find_label_near(code, m.start(), name)
 
+            # Without ng-model, only keep if we found a real label (not just the name fallback)
+            if not model_m and (not label or label == name) and not placeholder:
+                continue
+
+            seen.add(name)
             fields.append(
                 UIField(
                     name=name,

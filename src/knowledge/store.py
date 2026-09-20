@@ -243,6 +243,7 @@ class GraphStore:
             "form_fields": self.count_nodes(NodeType.FORM_FIELD),
             "ui_buttons": self.count_nodes(NodeType.UI_BUTTON),
             "i18n_strings": self.count_nodes(NodeType.I18N_STRING),
+            "ui_texts": self.count_nodes(NodeType.UI_TEXT),
             "api_endpoints": self.count_nodes(NodeType.API_ENDPOINT),
             "services": self.count_nodes(NodeType.SERVICE),
             "entities": self.count_nodes(NodeType.ENTITY),

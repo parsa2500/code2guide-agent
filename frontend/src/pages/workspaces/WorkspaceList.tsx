@@ -1,26 +1,42 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import BackButton, { HubLink } from "../../components/BackButton";
 import WorkspaceCard from "../../components/WorkspaceCard";
 import WorkspaceFormModal from "../../components/WorkspaceFormModal";
-import type { Workspace, WorkspaceInput } from "../../mock/workspaceStore";
+import type { WorkspaceInput, WorkspaceOut } from "../../api/workspaces";
 import {
   createWorkspace,
-  listActiveWorkspaces,
-  softDeleteWorkspace,
+  deleteWorkspace,
+  listWorkspaces,
   updateWorkspace,
-} from "../../mock/workspaceStore";
+} from "../../api/workspaces";
 
 export default function WorkspaceList() {
   const navigate = useNavigate();
-  const [items, setItems] = useState(() => listActiveWorkspaces());
+  const [items, setItems] = useState<WorkspaceOut[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [mode, setMode] = useState<"create" | "edit">("create");
-  const [editing, setEditing] = useState<Workspace | null>(null);
+  const [editing, setEditing] = useState<WorkspaceOut | null>(null);
 
-  const refresh = useCallback(() => {
-    setItems(listActiveWorkspaces());
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await listWorkspaces();
+      setItems(data.items);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
   }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
 
   function openCreate() {
     setMode("create");
@@ -28,27 +44,40 @@ export default function WorkspaceList() {
     setModalOpen(true);
   }
 
-  function openEdit(ws: Workspace) {
+  function openEdit(ws: WorkspaceOut) {
     setMode("edit");
     setEditing(ws);
     setModalOpen(true);
   }
 
-  function handleSubmit(input: WorkspaceInput) {
-    if (mode === "create") {
-      createWorkspace(input);
-    } else if (editing) {
-      updateWorkspace(editing.id, input);
+  async function handleSubmit(input: WorkspaceInput) {
+    setSaving(true);
+    setError(null);
+    try {
+      if (mode === "create") {
+        await createWorkspace(input);
+      } else if (editing) {
+        await updateWorkspace(editing.id, input);
+      }
+      setModalOpen(false);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
     }
-    setModalOpen(false);
-    refresh();
   }
 
-  function handleDelete(ws: Workspace) {
+  async function handleDelete(ws: WorkspaceOut) {
     const ok = window.confirm(`«${ws.name}» به لیست حذف‌شده‌ها منتقل شود؟`);
     if (!ok) return;
-    softDeleteWorkspace(ws.id);
-    refresh();
+    setError(null);
+    try {
+      await deleteWorkspace(ws.id);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
   }
 
   return (
@@ -67,7 +96,7 @@ export default function WorkspaceList() {
       <main className="shell-main">
         <div className="panel-head">
           <span>Workspaces</span>
-          <span>{items.length} active</span>
+          <span>{loading ? "…" : `${items.length} active`}</span>
         </div>
 
         <div className="toolbar">
@@ -77,9 +106,20 @@ export default function WorkspaceList() {
           <Link to="/workspaces/trash" className="btn btn-teal">
             حذف‌شده‌ها
           </Link>
+          <button type="button" className="btn" onClick={() => void refresh()} disabled={loading}>
+            تازه‌سازی
+          </button>
         </div>
 
-        {items.length === 0 ? (
+        {error ? (
+          <p className="empty-hint" data-tone="error" role="alert">
+            {error}
+          </p>
+        ) : null}
+
+        {loading ? (
+          <p className="empty-hint">در حال بارگذاری…</p>
+        ) : items.length === 0 ? (
           <p className="empty-hint">workspace فعالی نیست. یکی بسازید یا از حذف‌شده‌ها بازیابی کنید.</p>
         ) : (
           <div className="ws-grid">
@@ -89,7 +129,7 @@ export default function WorkspaceList() {
                 workspace={ws}
                 onOpen={() => navigate(`/workspaces/${ws.id}`)}
                 onEdit={() => openEdit(ws)}
-                onDelete={() => handleDelete(ws)}
+                onDelete={() => void handleDelete(ws)}
               />
             ))}
           </div>
@@ -100,8 +140,9 @@ export default function WorkspaceList() {
         open={modalOpen}
         mode={mode}
         initial={editing}
+        busy={saving}
         onClose={() => setModalOpen(false)}
-        onSubmit={handleSubmit}
+        onSubmit={(input) => void handleSubmit(input)}
       />
     </div>
   );

@@ -41,6 +41,9 @@ export interface IndexResponse {
 async function parseError(res: Response): Promise<string> {
   try {
     const body = await res.json();
+    if (typeof body?.message === "string") {
+      return body.code ? `${body.message} (${body.code})` : body.message;
+    }
     if (typeof body?.detail === "string") return body.detail;
     if (Array.isArray(body?.detail)) {
       return body.detail.map((d: { msg?: string }) => d.msg || JSON.stringify(d)).join("؛ ");
@@ -49,6 +52,24 @@ async function parseError(res: Response): Promise<string> {
   } catch {
     return `HTTP ${res.status}`;
   }
+}
+
+export { parseError };
+
+export async function apiFetch<T>(
+  path: string,
+  init?: RequestInit,
+): Promise<T> {
+  const res = await fetch(path, {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...(init?.headers || {}),
+    },
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  if (res.status === 204) return undefined as T;
+  return res.json() as Promise<T>;
 }
 
 export async function askGuide(

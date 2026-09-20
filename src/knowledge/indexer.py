@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, Set, TYPE_CHECKING
 from src.knowledge.schema import EdgeType, GraphEdge, GraphNode, NodeType
 from src.knowledge.store import GraphStore
 from src.search.hybrid_indexer import IndexedItem
+from src.parsers.ui_text_extractor import UiTextExtractor
 
 if TYPE_CHECKING:
     from src.agent.tools import Code2GuideToolbox
@@ -26,6 +27,7 @@ class IndexResult:
     form_fields: int = 0
     ui_buttons: int = 0
     i18n_strings: int = 0
+    ui_texts: int = 0
     edges: int = 0
     indexed_count: int = 0
     use_vector: bool = False
@@ -54,6 +56,7 @@ class IndexResult:
             "form_fields": self.form_fields,
             "ui_buttons": self.ui_buttons,
             "i18n_strings": self.i18n_strings,
+            "ui_texts": self.ui_texts,
             "edges": self.edges,
             "indexed_count": self.indexed_count,
             "use_vector": self.use_vector,
@@ -77,6 +80,7 @@ class FrontendIndexer:
     """Full-workspace frontend deep index without artificial file caps."""
 
     UI_EXTS = (".tsx", ".jsx", ".vue", ".cshtml", ".html")
+    SCRIPT_EXTS = (".js", ".ts")
 
     def __init__(self, toolbox: "Code2GuideToolbox", store: GraphStore):
         self.toolbox = toolbox
@@ -148,7 +152,7 @@ class FrontendIndexer:
 
         # --- Deep AST on all UI files ---
         files_inspected = 0
-        form_count = field_count = button_count = component_count = 0
+        form_count = field_count = button_count = component_count = ui_text_count = 0
         for fpath in sorted(ui_files):
             inspection = self.toolbox.inspect_component(fpath)
             if "error" in inspection:
@@ -176,6 +180,50 @@ class FrontendIndexer:
                     metadata={"component_name": comp_name},
                 )
             )
+
+            for span in inspection.get("ui_texts") or []:
+                text = (span.get("text") or "").strip()
+                if not text:
+                    continue
+                kind = span.get("kind") or "static"
+                text_id = UiTextExtractor.stable_id(fpath, kind, text)
+                ui_text_count += 1
+                nodes.append(
+                    GraphNode(
+                        id=text_id,
+                        node_type=NodeType.UI_TEXT,
+                        title=text,
+                        file_path=fpath,
+                        payload={
+                            "kind": kind,
+                            "text": text,
+                            "line_number": span.get("line_number") or 1,
+                            "context": span.get("context"),
+                        },
+                    )
+                )
+                edges.append(
+                    GraphEdge(
+                        id=f"edge:contains_text:{comp_id}:{text_id}",
+                        edge_type=EdgeType.CONTAINS_TEXT,
+                        source_id=comp_id,
+                        target_id=text_id,
+                    )
+                )
+                items.append(
+                    IndexedItem(
+                        id=text_id,
+                        title=text,
+                        content=f"{text} {kind} {fpath}",
+                        file_path=fpath,
+                        item_type="ui_text",
+                        metadata={
+                            "kind": kind,
+                            "line_number": span.get("line_number") or 1,
+                            "context": span.get("context"),
+                        },
+                    )
+                )
 
             forms = inspection.get("forms") or []
             # Promote standalone fields/buttons into a synthetic form when present
@@ -333,6 +381,76 @@ class FrontendIndexer:
                     )
                 )
 
+        # --- Script-only files (UI-facing string literals) ---
+        for fpath in sorted(self._collect_script_files()):
+            if fpath in ui_files:
+                continue
+            full = Path(self.workspace_path) / fpath
+            if not full.exists():
+                continue
+            try:
+                code = full.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                continue
+            files_inspected += 1
+            extractor = getattr(self.toolbox, "ui_text_extractor", None) or UiTextExtractor()
+            spans = extractor.extract(code, file_path=fpath)
+            if not spans:
+                continue
+            comp_id = f"component:{fpath}"
+            nodes.append(
+                GraphNode(
+                    id=comp_id,
+                    node_type=NodeType.COMPONENT,
+                    title=Path(fpath).stem,
+                    file_path=fpath,
+                    payload={"component_name": Path(fpath).stem, "kind": "script"},
+                )
+            )
+            component_count += 1
+            for span in spans:
+                text = (span.text or "").strip()
+                if not text:
+                    continue
+                text_id = UiTextExtractor.stable_id(fpath, span.kind, text)
+                ui_text_count += 1
+                nodes.append(
+                    GraphNode(
+                        id=text_id,
+                        node_type=NodeType.UI_TEXT,
+                        title=text,
+                        file_path=fpath,
+                        payload={
+                            "kind": span.kind,
+                            "text": text,
+                            "line_number": span.line_number,
+                            "context": span.context,
+                        },
+                    )
+                )
+                edges.append(
+                    GraphEdge(
+                        id=f"edge:contains_text:{comp_id}:{text_id}",
+                        edge_type=EdgeType.CONTAINS_TEXT,
+                        source_id=comp_id,
+                        target_id=text_id,
+                    )
+                )
+                items.append(
+                    IndexedItem(
+                        id=text_id,
+                        title=text,
+                        content=f"{text} {span.kind} {fpath}",
+                        file_path=fpath,
+                        item_type="ui_text",
+                        metadata={
+                            "kind": span.kind,
+                            "line_number": span.line_number,
+                            "context": span.context,
+                        },
+                    )
+                )
+
         # --- i18n ---
         i18n_count = 0
         translations = getattr(self.toolbox.i18n_parser, "translations", {}) or {}
@@ -375,6 +493,7 @@ class FrontendIndexer:
             form_fields=field_count,
             ui_buttons=button_count,
             i18n_strings=i18n_count,
+            ui_texts=ui_text_count,
             edges=len(edges),
             indexed_count=len(items),
             use_vector=bool(self.toolbox.hybrid_indexer.use_vector),
@@ -385,10 +504,34 @@ class FrontendIndexer:
                 "ui_files": len(ui_files),
                 "files_inspected": files_inspected,
                 "hybrid_items": len(items),
+                "ui_texts": ui_text_count,
             },
         )
         self.store.mark_indexed(result.to_dict())
         return result
+
+    def _collect_script_files(self) -> Set[str]:
+        """Collect limited JS/TS sources likely to hold UI-facing strings."""
+        ws_root = Path(self.workspace_path).resolve()
+        files: Set[str] = set()
+        skip = ("node_modules", ".git", "dist", "build", "bin", "obj", ".next", "coverage")
+        for pattern in (
+            "**/Contents/**/*.js",
+            "**/Scripts/**/*.js",
+            "**/scripts/**/*.js",
+            "**/controllers/**/*.js",
+            "**/Controllers/**/*.js",
+            "**/app/**/*.js",
+            "**/ng-templates/**/*.js",
+        ):
+            for p in ws_root.glob(pattern):
+                if any(s in str(p) for s in skip):
+                    continue
+                try:
+                    files.add(str(p.relative_to(ws_root)).replace("\\", "/"))
+                except ValueError:
+                    pass
+        return files
 
     def _collect_ui_files(self, routes) -> Set[str]:
         ws_root = Path(self.workspace_path).resolve()

@@ -61,6 +61,7 @@ class IndexWorkspaceResponse(BaseModel):
     form_fields: int = 0
     ui_buttons: int = 0
     i18n_strings: int = 0
+    ui_texts: int = 0
     api_endpoints: int = 0
     services: int = 0
     entities: int = 0
@@ -224,6 +225,7 @@ def index_workspace(payload: IndexWorkspaceRequest):
             form_fields=d.get("form_fields", 0),
             ui_buttons=d.get("ui_buttons", 0),
             i18n_strings=d.get("i18n_strings", 0),
+            ui_texts=d.get("ui_texts", 0),
             api_endpoints=d.get("api_endpoints", 0),
             services=d.get("services", 0),
             entities=d.get("entities", 0),
