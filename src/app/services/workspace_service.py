@@ -169,6 +169,12 @@ class WorkspaceService:
             message="Workspace به سطل حذف منتقل شد",
         )
         self.db.commit()
+        try:
+            from src.knowledge.manager import get_index_manager
+
+            get_index_manager(saved.path, workspace_id=workspace_id).mark_tombstone(True)
+        except Exception:
+            pass
         return saved
 
     def restore(self, workspace_id: str) -> WorkspaceEntity:
@@ -193,6 +199,12 @@ class WorkspaceService:
             message="Workspace بازیابی شد",
         )
         self.db.commit()
+        try:
+            from src.knowledge.manager import get_index_manager
+
+            get_index_manager(saved.path, workspace_id=workspace_id).mark_tombstone(False)
+        except Exception:
+            pass
         return saved
 
     def set_status(self, workspace_id: str, status: WorkspaceStatus) -> WorkspaceEntity:

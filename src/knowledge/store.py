@@ -17,22 +17,61 @@ def workspace_hash(workspace_path: str) -> str:
     return hashlib.sha1(resolved.encode("utf-8")).hexdigest()[:12]
 
 
-def default_db_path(workspace_path: str, index_root: Optional[str] = None) -> Path:
-    root = Path(index_root) if index_root else Path(".code2guide") / "index"
-    root.mkdir(parents=True, exist_ok=True)
-    return root / f"{workspace_hash(workspace_path)}.db"
+def default_db_path(
+    workspace_path: str,
+    index_root: Optional[str] = None,
+    *,
+    workspace_id: Optional[str] = None,
+    revision_id: Optional[str] = None,
+) -> Path:
+    """Resolve graph DB path. Prefer workspace_id key; dual-read legacy path-hash."""
+    from src.knowledge.contract import resolve_graph_db_path
+
+    path, _mode = resolve_graph_db_path(
+        workspace_path=workspace_path,
+        workspace_id=workspace_id,
+        revision_id=revision_id,
+        index_root=index_root,
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 class GraphStore:
     """Persists nodes/edges and index metadata for one workspace."""
 
-    def __init__(self, workspace_path: str, db_path: Optional[Path] = None):
+    def __init__(
+        self,
+        workspace_path: str,
+        db_path: Optional[Path] = None,
+        *,
+        workspace_id: Optional[str] = None,
+        revision_id: Optional[str] = None,
+        index_root: Optional[str] = None,
+    ):
         self.workspace_path = str(Path(workspace_path).resolve())
-        self.db_path = Path(db_path) if db_path else default_db_path(self.workspace_path)
+        self.workspace_id = workspace_id
+        self.revision_id = revision_id
+        if db_path is not None:
+            self.db_path = Path(db_path)
+            self.storage_mode = "explicit"
+        else:
+            from src.knowledge.contract import resolve_graph_db_path
+
+            self.db_path, self.storage_mode = resolve_graph_db_path(
+                workspace_path=self.workspace_path,
+                workspace_id=workspace_id,
+                revision_id=revision_id,
+                index_root=index_root,
+            )
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._init_schema()
+        if workspace_id:
+            self.set_meta("workspace_id", workspace_id)
+        if revision_id:
+            self.set_meta("revision_id", revision_id)
 
     def _init_schema(self) -> None:
         cur = self._conn.cursor()

@@ -51,3 +51,8 @@ class AgentState(BaseModel):
 
     # Final synthesized answer
     final_persian_guide: Optional[str] = Field(default=None, description="Synthesized UX guide in Persian")
+
+    # اهرم ۲ — abstain / confidence
+    confidence: float = Field(default=1.0, description="Answer confidence 0..1")
+    abstain: bool = Field(default=False, description="True when guide must not invent steps")
+    reason_codes: List[str] = Field(default_factory=list, description="Abstain / weakness codes")

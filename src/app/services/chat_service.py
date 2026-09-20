@@ -77,7 +77,7 @@ class ChatService:
         )
 
         try:
-            guide = self._generate_guide(cleaned, ws.path, bot.role)
+            guide = self._generate_guide(cleaned, ws.path, bot.role, workspace_id=ws.id)
         except GuideFailedError:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -108,10 +108,17 @@ class ChatService:
 
         return user_msg, assistant_msg
 
-    def _generate_guide(self, query: str, workspace_path: str, role: ChatbotRole) -> str:
+    def _generate_guide(
+        self,
+        query: str,
+        workspace_path: str,
+        role: ChatbotRole,
+        *,
+        workspace_id: str | None = None,
+    ) -> str:
         from src.agent.workflow import Code2GuideAgent
 
-        agent = Code2GuideAgent(workspace_path=workspace_path)
+        agent = Code2GuideAgent(workspace_path=workspace_path, workspace_id=workspace_id)
         audience = "end_user" if role == ChatbotRole.END_USER else None
         try:
             if audience:

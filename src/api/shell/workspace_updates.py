@@ -49,6 +49,7 @@ def start_update(
         job.id,
         ws.path,
         rebuild=payload.rebuild,
+        workspace_id=ws.id,
     )
     return UpdateJobAcceptedOut(job_id=job.id, status=job.status, started_at=job.started_at)
 
