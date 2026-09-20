@@ -12,7 +12,12 @@ from src.parsers.ast_visitor import DiscoveredForm, ComponentInspection
 from src.parsers.route_extractor import RouteNode
 from src.agent.state import AgentState
 from src.agent.tools import Code2GuideToolbox, dump_model
-from src.agent.prompts import SYSTEM_PROMPT, UX_GUIDE_TEMPLATE
+from src.agent.prompts import (
+    SYSTEM_PROMPT,
+    UX_GUIDE_TEMPLATE,
+    END_USER_SYSTEM_PROMPT,
+    END_USER_GUIDE_TEMPLATE,
+)
 from src.agent.planner import QueryPlanner
 from src.knowledge.schema import NodeType
 
@@ -65,13 +70,21 @@ class Code2GuideWorkflow:
 
     def node_plan_query(self, state: AgentState) -> Dict[str, Any]:
         plan = self.planner.plan(state.query)
+        if getattr(state, "audience", "technical") == "end_user":
+            # End-user mode: always UX-only; never backend/flow synthesis
+            plan.intent = "ux"
+            plan.skip_ux_template = False
+            state.is_backend_query = False
+            state.is_flow_query = False
+        else:
+            state.is_backend_query = plan.intent in ("api", "data", "mixed") or Code2GuideToolbox.is_backend_query(
+                state.query
+            )
+            state.is_flow_query = plan.intent in ("flow", "mixed") or Code2GuideToolbox.is_flow_query(state.query)
         state.query_plan = plan.model_dump()
-        state.is_backend_query = plan.intent in ("api", "data", "mixed") or Code2GuideToolbox.is_backend_query(
-            state.query
-        )
-        state.is_flow_query = plan.intent in ("flow", "mixed") or Code2GuideToolbox.is_flow_query(state.query)
         state.steps_taken.append(
             f"Planned intent={plan.intent} tools={plan.tools} skip_ast={plan.skip_ast}"
+            + (f" audience={state.audience}" if state.audience != "technical" else "")
         )
         return dump_model(state)
 
@@ -457,6 +470,9 @@ class Code2GuideWorkflow:
 
     def node_synthesize_guide(self, state: AgentState) -> Dict[str, Any]:
         """Synthesizes Persian guidance from cited evidence; no guessing when empty."""
+        if getattr(state, "audience", "technical") == "end_user":
+            return self._synthesize_end_user_guide(state)
+
         plan = state.query_plan or {}
         intent = plan.get("intent") or "ux"
         evidence = state.tool_evidence or []
@@ -727,6 +743,140 @@ class Code2GuideWorkflow:
         state.steps_taken.append("Synthesized structured Persian guide via template engine")
         return dump_model(state)
 
+    def _synthesize_end_user_guide(self, state: AgentState) -> Dict[str, Any]:
+        """Simple non-technical guide: menu → fields → button. No files/API/citations."""
+        has_ux = bool(state.discovered_forms or state.identified_routes or state.extracted_breadcrumbs)
+        if not has_ux:
+            state.final_persian_guide = normalize_guide_markdown(
+                "## چطور این کار را انجام دهید\n\n"
+                "در راهنمای سامانه چیزی پیدا نشد. لطفاً سؤال را با نام صفحه یا کار موردنظر دوباره بپرسید.\n"
+            )
+            state.status = "completed"
+            state.steps_taken.append("End-user: no UX evidence — simple refusal")
+            return dump_model(state)
+
+        # Navigation in everyday language
+        if state.extracted_breadcrumbs:
+            steps = state.extracted_breadcrumbs
+            nav_lines = ["از منوی اصلی سامانه این مسیر را دنبال کنید:"]
+            for i, step in enumerate(steps, 1):
+                nav_lines.append(f"{i}. وارد «{step}» شوید.")
+            nav_section = "\n".join(nav_lines)
+        elif state.identified_routes and state.identified_routes[0].title:
+            title = state.identified_routes[0].title
+            nav_section = f"از منوی اصلی وارد صفحهٔ «{title}» شوید."
+        else:
+            nav_section = "از منوی اصلی وارد بخش مربوط به این کار شوید."
+
+        rbac_notes = ""
+        if state.required_roles:
+            roles_str = "، ".join(state.required_roles)
+            rbac_notes = (
+                f"\n> برای انجام این کار، حساب کاربری شما باید دسترسی لازم "
+                f"({roles_str}) داشته باشد.\n"
+            )
+
+        req_labels: List[str] = []
+        opt_labels: List[str] = []
+        for form in state.discovered_forms:
+            for field in form.fields:
+                label = (field.label or field.name or "").strip()
+                if not label:
+                    continue
+                # Skip English-only technical names if Persian label missing and looks like camelCase
+                if field.required:
+                    req_labels.append(label)
+                else:
+                    opt_labels.append(label)
+
+        fields_lines: List[str] = []
+        if req_labels:
+            fields_lines.append("این موارد را حتماً پر کنید:")
+            for lab in req_labels:
+                fields_lines.append(f"- {lab}")
+        if opt_labels:
+            fields_lines.append("در صورت نیاز می‌توانید این موارد را هم پر کنید:")
+            for lab in opt_labels:
+                fields_lines.append(f"- {lab}")
+        if not fields_lines:
+            fields_lines.append("فیلدهای صفحه را طبق برچسب‌های روی فرم پر کنید.")
+        fields_section = "\n".join(fields_lines)
+
+        action_button = None
+        for form in state.discovered_forms:
+            for b in form.buttons:
+                if b.is_submit:
+                    action_button = b
+                    break
+            if action_button:
+                break
+        if not action_button and state.discovered_forms and state.discovered_forms[0].buttons:
+            action_button = state.discovered_forms[0].buttons[0]
+
+        if action_button:
+            btn_name = action_button.label or "ثبت"
+            action_section = (
+                f"روی دکمهٔ «{btn_name}» کلیک کنید. "
+                "اگر همهٔ موارد لازم را پر کرده باشید، کار ثبت می‌شود و پیام تأیید می‌بینید."
+            )
+        else:
+            action_section = (
+                "در پایان روی دکمهٔ ثبت یا ذخیره کلیک کنید تا کار انجام شود."
+            )
+
+        task_title = (
+            state.query.replace("چگونه", "")
+            .replace("چطور", "")
+            .replace("کنم؟", "")
+            .replace("کنیم؟", "")
+            .strip()
+            or "این کار"
+        )
+
+        plan = state.query_plan or {}
+        api_key = (
+            settings.openrouter_api_key
+            or os.getenv("OPENROUTER_API_KEY")
+            or settings.openai_api_key
+            or os.getenv("OPENAI_API_KEY")
+        )
+        if api_key and not plan.get("skip_ux_template"):
+            try:
+                model_name = settings.openrouter_model or settings.default_model
+                llm_output = self._call_real_llm(
+                    state=state,
+                    task_title=task_title,
+                    nav_section=nav_section,
+                    page_url="",
+                    fields_section=fields_section,
+                    action_section=action_section,
+                    api_key=api_key,
+                    model_name=model_name,
+                    rbac_notes=rbac_notes,
+                )
+                if llm_output and (
+                    "از کجا شروع کنید" in llm_output or "چطور این کار را انجام دهید" in llm_output
+                ):
+                    state.final_persian_guide = normalize_guide_markdown(llm_output)
+                    state.status = "completed"
+                    state.steps_taken.append(
+                        f"Synthesized end-user guide using LLM ({model_name})"
+                    )
+                    return dump_model(state)
+            except Exception as e:
+                state.steps_taken.append(f"End-user LLM fallback due to: {str(e)}")
+
+        guide = END_USER_GUIDE_TEMPLATE.format(
+            navigation_steps=nav_section,
+            rbac_notes=rbac_notes,
+            fields_breakdown=fields_section,
+            action_description=action_section,
+        )
+        state.final_persian_guide = normalize_guide_markdown(guide)
+        state.status = "completed"
+        state.steps_taken.append("Synthesized end-user guide via simple template")
+        return dump_model(state)
+
     def _call_real_llm(
         self,
         state: AgentState,
@@ -744,14 +894,38 @@ class Code2GuideWorkflow:
         base_url = settings.openrouter_base_url or os.getenv(
             "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
         )
-        api_bits = ""
-        if state.api_endpoints:
-            api_bits = "\n".join(
-                f"- {ep.method} {ep.path}"
-                + (f" roles={ep.roles_required}" if ep.roles_required else "")
-                for ep in state.api_endpoints[:6]
-            )
-        user_prompt = f"""پرسش کاربر: {state.query}
+        end_user = getattr(state, "audience", "technical") == "end_user"
+        if end_user:
+            system_prompt = END_USER_SYSTEM_PROMPT
+            user_prompt = f"""پرسش کاربر: {state.query}
+عنوان کار: {task_title}
+
+داده‌های سادهٔ صفحه (فقط برای راهنمایی کاربر عادی):
+۱. مسیر منو:
+{nav_section}
+{rbac_notes}
+۲. فیلدها:
+{fields_section}
+
+۳. دکمهٔ نهایی:
+{action_section}
+
+فقط یک راهنمای خیلی ساده و کوتاه به فارسی بنویسید با همین سه بخش:
+### از کجا شروع کنید
+### چه چیزهایی را وارد کنید
+### در پایان چه کنید
+بدون نام فایل، API، کد، یا URL.
+"""
+        else:
+            system_prompt = SYSTEM_PROMPT
+            api_bits = ""
+            if state.api_endpoints:
+                api_bits = "\n".join(
+                    f"- {ep.method} {ep.path}"
+                    + (f" roles={ep.roles_required}" if ep.roles_required else "")
+                    for ep in state.api_endpoints[:6]
+                )
+            user_prompt = f"""پرسش کاربر: {state.query}
 عنوان عملیات استخراج‌شده: {task_title}
 
 داده‌های فنی استخراج‌شده از تحلیل AST و روت‌های سورس‌کد:
@@ -787,7 +961,7 @@ class Code2GuideWorkflow:
                 temperature=0.1,
             )
             response = llm.invoke([
-                SystemMessage(content=SYSTEM_PROMPT),
+                SystemMessage(content=system_prompt),
                 HumanMessage(content=user_prompt)
             ])
             return str(response.content)
@@ -801,7 +975,7 @@ class Code2GuideWorkflow:
             completion = client.chat.completions.create(
                 model=model,
                 messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
                 temperature=0.1
@@ -812,11 +986,17 @@ class Code2GuideWorkflow:
 
         return None
 
-    def run(self, query: str, workspace_path: Optional[str] = None) -> AgentState:
+    def run(
+        self,
+        query: str,
+        workspace_path: Optional[str] = None,
+        audience: str = "technical",
+    ) -> AgentState:
         ws_path = workspace_path or self.workspace_path
         initial_state = AgentState(
             query=query,
-            workspace_path=ws_path
+            workspace_path=ws_path,
+            audience=audience if audience in ("technical", "end_user") else "technical",
         )
 
         if self.compiled_graph is not None:
@@ -845,5 +1025,14 @@ class Code2GuideAgent:
     ):
         self.workflow = Code2GuideWorkflow(workspace_path, toolbox=toolbox)
 
-    def ask(self, query: str, workspace_path: Optional[str] = None) -> AgentState:
-        return self.workflow.run(query=query, workspace_path=workspace_path)
+    def ask(
+        self,
+        query: str,
+        workspace_path: Optional[str] = None,
+        audience: str = "technical",
+    ) -> AgentState:
+        return self.workflow.run(
+            query=query,
+            workspace_path=workspace_path,
+            audience=audience,
+        )

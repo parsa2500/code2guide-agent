@@ -14,6 +14,7 @@
 | ساخت راهنمای UX فارسی | آماده (LLM یا template) |
 | ایندکس یک‌باره کل پروژه (فرانت) | آماده (`POST /index-workspace` + `src/knowledge/`) |
 | Hybrid / Qdrant در مسیر `/ask` | وصل؛ retrieval-first از گراف + بردار |
+| راهنمای کاربر نهایی | آماده (`POST /ask-enduser` — بدون فایل/API/استناد فنی) |
 | پارس بک‌اند (API / service / entity / DB) | آماده برای .NET Core و ASP.NET MVC Framework (`src/parsers/dotnet/` + MvcApiParser + BackendIndexer) |
 | گراف رابطه فرانت ↔ بک | آماده (`CALLS_API` + `GET /api/v1/trace` + field `MAPS_TO`)؛ AngularJS `$http`/`$resource` هم پشتیبانی می‌شود |
 | Q&A آزاد روی کل سیستم | آماده — planner + tools + citations + golden set + incremental skip |

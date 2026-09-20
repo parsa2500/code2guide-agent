@@ -21,21 +21,59 @@ $SessionFile = Join-Path $SessionDir "dev-session.json"
 $LogDir = Join-Path $SessionDir "logs"
 New-Item -ItemType Directory -Force -Path $SessionDir, $LogDir | Out-Null
 
-function Test-PortOpen([int]$Port) {
+function Test-ProcessAlive([int]$ProcessId) {
+  if ($ProcessId -le 0) { return $false }
+  return $null -ne (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)
+}
+
+function Invoke-TaskKill([int]$ProcessId) {
+  if (-not (Test-ProcessAlive $ProcessId)) { return $false }
+  # Route through cmd so stderr never becomes a terminating NativeCommandError under Stop
+  cmd.exe /c "taskkill /PID $ProcessId /T /F >nul 2>&1" | Out-Null
+  return -not (Test-ProcessAlive $ProcessId)
+}
+
+function Get-ListenPids([int]$Port) {
+  $pids = @()
   try {
-    $c = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
-    return $null -ne $c
-  } catch {
-    return $false
-  }
+    $conns = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+    foreach ($c in @($conns)) {
+      if ($c.OwningProcess -and $c.OwningProcess -gt 0) {
+        $pids += [int]$c.OwningProcess
+      }
+    }
+  } catch {}
+  return @($pids | Select-Object -Unique)
+}
+
+function Test-PortOpen([int]$Port) {
+  return @(Get-ListenPids $Port).Count -gt 0
 }
 
 function Stop-PortListeners([int]$Port) {
-  $conns = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
-  foreach ($c in @($conns)) {
-    if ($c.OwningProcess -and $c.OwningProcess -gt 0) {
-      & taskkill /PID $c.OwningProcess /T /F 2>$null | Out-Null
+  $pids = Get-ListenPids $Port
+  foreach ($procId in $pids) {
+    if (Test-ProcessAlive $procId) {
+      Write-Host "  stop live pid $procId on :$Port"
+      [void](Invoke-TaskKill $procId)
+    } else {
+      Write-Host "  skip ghost pid $procId on :$Port (process already gone)" -ForegroundColor DarkYellow
     }
+  }
+  Start-Sleep -Milliseconds 300
+}
+
+function Clear-PortOrWarn([int]$Port) {
+  if (-not (Test-PortOpen $Port)) { return }
+  Write-Host "-> Port $Port busy - clearing listeners" -ForegroundColor DarkYellow
+  Stop-PortListeners $Port
+
+  $left = Get-ListenPids $Port
+  $live = @($left | Where-Object { Test-ProcessAlive $_ })
+  if ($live.Count -gt 0) {
+    Write-Warning ("Port {0} still held by live PID(s): {1}. API/UI may fail to bind." -f $Port, ($live -join ", "))
+  } elseif ($left.Count -gt 0) {
+    Write-Host "  stale TCP rows remain on :$Port; continuing (bind usually still works)" -ForegroundColor DarkYellow
   }
 }
 
@@ -59,14 +97,8 @@ if (-not $SkipInstall) {
   }
 }
 
-if (Test-PortOpen $ApiPort) {
-  Write-Host "-> Port $ApiPort busy - stopping previous listener" -ForegroundColor DarkYellow
-  Stop-PortListeners $ApiPort
-}
-if (Test-PortOpen $UiPort) {
-  Write-Host "-> Port $UiPort busy - stopping previous listener" -ForegroundColor DarkYellow
-  Stop-PortListeners $UiPort
-}
+Clear-PortOrWarn $ApiPort
+Clear-PortOrWarn $UiPort
 
 $ApiLog = Join-Path $LogDir "api.out.log"
 $ApiErr = Join-Path $LogDir "api.err.log"

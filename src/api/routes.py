@@ -137,6 +137,71 @@ def ask_codebase_markdown(payload: AskRequest):
 
 
 @router.post(
+    "/ask-enduser",
+    response_model=AskResponse,
+    summary="راهنمای ساده برای کاربر نهایی (بدون جزئیات فنی)",
+)
+def ask_enduser(payload: AskRequest):
+    """Step-by-step Persian guide for non-technical end users — no files, API, or citations."""
+    target_ws = payload.workspace_path or settings.target_workspace_path
+    try:
+        agent = Code2GuideAgent(workspace_path=target_ws)
+        state = agent.ask(
+            query=payload.query,
+            workspace_path=target_ws,
+            audience="end_user",
+        )
+        guide = normalize_guide_markdown(
+            state.final_persian_guide or "در راهنمای سامانه چیزی پیدا نشد."
+        )
+        return AskResponse(
+            query=state.query,
+            guide=guide,
+            breadcrumbs=state.extracted_breadcrumbs,
+            routes_found=len(state.identified_routes),
+            forms_found=len(state.discovered_forms),
+            steps_taken=state.steps_taken,
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error executing end-user guide: {str(e)}",
+        )
+
+
+@router.post(
+    "/ask-enduser.md",
+    response_class=PlainTextResponse,
+    summary="راهنمای ساده کاربر نهایی به‌صورت Markdown",
+)
+def ask_enduser_markdown(payload: AskRequest):
+    """Same as /ask-enduser, raw Markdown for download/viewers."""
+    target_ws = payload.workspace_path or settings.target_workspace_path
+    try:
+        agent = Code2GuideAgent(workspace_path=target_ws)
+        state = agent.ask(
+            query=payload.query,
+            workspace_path=target_ws,
+            audience="end_user",
+        )
+        guide = normalize_guide_markdown(
+            state.final_persian_guide or "در راهنمای سامانه چیزی پیدا نشد."
+        )
+        return PlainTextResponse(
+            content=guide,
+            media_type="text/markdown; charset=utf-8",
+            headers={
+                "Content-Disposition": 'inline; filename="code2guide-enduser.md"',
+            },
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error executing end-user guide: {str(e)}",
+        )
+
+
+@router.post(
     "/index-workspace",
     response_model=IndexWorkspaceResponse,
     summary="Deep-index frontend UI and .NET backend into the knowledge graph",

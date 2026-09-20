@@ -15,19 +15,46 @@ Set-Location $Root
 
 $SessionFile = Join-Path $Root ".code2guide\dev-session.json"
 
+function Test-ProcessAlive([int]$ProcessId) {
+  if ($ProcessId -le 0) { return $false }
+  return $null -ne (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)
+}
+
+function Invoke-TaskKill([int]$ProcessId) {
+  if (-not (Test-ProcessAlive $ProcessId)) { return $false }
+  cmd.exe /c "taskkill /PID $ProcessId /T /F >nul 2>&1" | Out-Null
+  return -not (Test-ProcessAlive $ProcessId)
+}
+
+function Get-ListenPids([int]$Port) {
+  $pids = @()
+  try {
+    $conns = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+    foreach ($c in @($conns)) {
+      if ($c.OwningProcess -and $c.OwningProcess -gt 0) {
+        $pids += [int]$c.OwningProcess
+      }
+    }
+  } catch {}
+  return @($pids | Select-Object -Unique)
+}
+
 function Stop-PortListeners([int]$Port) {
-  $conns = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
-  foreach ($c in @($conns)) {
-    if ($c.OwningProcess -and $c.OwningProcess -gt 0) {
-      Write-Host "  stop pid $($c.OwningProcess) on :$Port"
-      & taskkill /PID $c.OwningProcess /T /F 2>$null | Out-Null
+  foreach ($procId in @(Get-ListenPids $Port)) {
+    if (Test-ProcessAlive $procId) {
+      Write-Host "  stop live pid $procId on :$Port"
+      [void](Invoke-TaskKill $procId)
+    } else {
+      Write-Host "  skip ghost pid $procId on :$Port (process already gone)" -ForegroundColor DarkYellow
     }
   }
 }
 
 function Stop-Tree([int]$ProcessId) {
   if ($ProcessId -le 0) { return }
-  & taskkill /PID $ProcessId /T /F 2>$null | Out-Null
+  if (-not (Test-ProcessAlive $ProcessId)) { return }
+  Write-Host "  stop tree pid $ProcessId"
+  [void](Invoke-TaskKill $ProcessId)
 }
 
 Write-Host "==> Code2Guide DOWN" -ForegroundColor Cyan
@@ -53,20 +80,17 @@ Write-Host "-> Stop API / UI processes" -ForegroundColor Yellow
 if ($apiPid) { Stop-Tree $apiPid }
 if ($uiPid) { Stop-Tree $uiPid }
 
-# Uvicorn --reload and npm spawn children that may keep the port
 Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
   Where-Object {
     ($_.Name -match 'python|uvicorn') -and ($_.CommandLine -match 'uvicorn|src\.api\.main')
   } |
   ForEach-Object {
-    Write-Host "  stop python/uvicorn pid $($_.ProcessId)"
     Stop-Tree ([int]$_.ProcessId)
   }
 
 Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction SilentlyContinue |
   Where-Object { $_.CommandLine -match 'vite|code2giude-agent\\frontend|code2guide-frontend' } |
   ForEach-Object {
-    Write-Host "  stop orphan node pid $($_.ProcessId)"
     Stop-Tree ([int]$_.ProcessId)
   }
 

@@ -14,6 +14,10 @@ class AgentState(BaseModel):
     query: str = Field(description="Persian user question or goal")
     workspace_path: str = Field(description="Root directory of target codebase")
     normalized_query: str = Field(default="", description="Cleaned Persian query")
+    audience: str = Field(
+        default="technical",
+        description="technical | end_user — controls synthesis style",
+    )
 
     # Extracted UX entities
     extracted_breadcrumbs: List[str] = Field(default_factory=list, description="Resolved navigation path")
