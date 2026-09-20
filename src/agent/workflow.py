@@ -11,6 +11,7 @@ from src.core.normalizer import default_normalizer
 from src.parsers.ast_visitor import DiscoveredForm, ComponentInspection
 from src.parsers.route_extractor import RouteNode
 from src.agent.state import AgentState
+from src.agent.abstain import apply_abstain_to_state
 from src.agent.tools import Code2GuideToolbox, dump_model
 from src.agent.prompts import (
     SYSTEM_PROMPT,
@@ -1011,8 +1012,12 @@ class Code2GuideWorkflow:
         if self.compiled_graph is not None:
             output = self.compiled_graph.invoke(initial_state)
             if isinstance(output, dict):
-                return AgentState(**output)
-            return output
+                state = AgentState(**output)
+            else:
+                state = output
+            store = getattr(self.toolbox, "_graph_store", None)
+            apply_abstain_to_state(state, store=store)
+            return state
         else:
             s = initial_state
             self.node_plan_query(s)
@@ -1021,6 +1026,8 @@ class Code2GuideWorkflow:
             self.node_inspect_ast(s)
             self.node_gather_evidence(s)
             self.node_synthesize_guide(s)
+            store = getattr(self.toolbox, "_graph_store", None)
+            apply_abstain_to_state(s, store=store)
             return s
 
 

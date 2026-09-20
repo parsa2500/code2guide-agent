@@ -28,6 +28,9 @@ class AskResponse(BaseModel):
     routes_found: int
     forms_found: int
     steps_taken: List[str]
+    confidence: float = 1.0
+    abstain: bool = False
+    reason_codes: List[str] = []
 
 
 class ScanWorkspaceRequest(BaseModel):
@@ -100,7 +103,10 @@ def ask_codebase(payload: AskRequest):
             breadcrumbs=state.extracted_breadcrumbs,
             routes_found=len(state.identified_routes),
             forms_found=len(state.discovered_forms),
-            steps_taken=state.steps_taken
+            steps_taken=state.steps_taken,
+            confidence=getattr(state, "confidence", 1.0),
+            abstain=bool(getattr(state, "abstain", False)),
+            reason_codes=list(getattr(state, "reason_codes", []) or []),
         )
     except Exception as e:
         raise HTTPException(
@@ -162,6 +168,9 @@ def ask_enduser(payload: AskRequest):
             routes_found=len(state.identified_routes),
             forms_found=len(state.discovered_forms),
             steps_taken=state.steps_taken,
+            confidence=getattr(state, "confidence", 1.0),
+            abstain=bool(getattr(state, "abstain", False)),
+            reason_codes=list(getattr(state, "reason_codes", []) or []),
         )
     except Exception as e:
         raise HTTPException(
