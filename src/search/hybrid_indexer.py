@@ -33,12 +33,23 @@ except ImportError:
     _has_fastembed = False
 
 
-def collection_name_for_workspace(workspace_path: str, prefix: str = "code2guide") -> str:
-    """Stable Qdrant collection name scoped to an absolute workspace path."""
-    resolved = str(Path(workspace_path).resolve())
-    digest = hashlib.sha1(resolved.encode("utf-8")).hexdigest()[:12]
-    safe_prefix = re.sub(r"[^a-zA-Z0-9_]", "_", prefix)[:32]
-    return f"{safe_prefix}_{digest}"
+def collection_name_for_workspace(
+    workspace_path: str,
+    prefix: str = "code2guide",
+    *,
+    workspace_id: Optional[str] = None,
+    revision_id: Optional[str] = None,
+) -> str:
+    """Stable Qdrant collection name. Prefer workspace_id over path hash."""
+    from src.knowledge.contract import resolve_collection_name
+
+    name, _mode = resolve_collection_name(
+        workspace_path=workspace_path,
+        workspace_id=workspace_id,
+        revision_id=revision_id,
+        prefix=prefix,
+    )
+    return name
 
 
 class IndexedItem(BaseModel):

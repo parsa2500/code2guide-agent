@@ -47,8 +47,13 @@ class Code2GuideToolbox:
         self,
         workspace_path: Optional[str] = None,
         hybrid_indexer: Optional[HybridIndexer] = None,
+        *,
+        workspace_id: Optional[str] = None,
+        revision_id: Optional[str] = None,
     ):
         self.workspace_path = workspace_path or settings.target_workspace_path
+        self.workspace_id = workspace_id
+        self.revision_id = revision_id
         self.normalizer = default_normalizer
         self.lexical_engine = RipgrepLexicalEngine(self.workspace_path, normalizer=self.normalizer)
         self.ast_visitor = JSXASTVisitor(normalizer=self.normalizer)
@@ -63,7 +68,7 @@ class Code2GuideToolbox:
         self._graph_store: Optional[GraphStore] = None
         self._index_manager = None
         # Prefer process-level manager so /ask reuses index across requests
-        manager = get_index_manager(self.workspace_path, hybrid_indexer=hybrid_indexer)
+        manager = get_index_manager(self.workspace_path, hybrid_indexer=hybrid_indexer, workspace_id=workspace_id, revision_id=revision_id)
         manager.attach_toolbox(self)
         if hybrid_indexer is not None:
             self.hybrid_indexer = hybrid_indexer
@@ -279,7 +284,7 @@ class Code2GuideToolbox:
     @property
     def graph_store(self) -> GraphStore:
         if self._graph_store is None:
-            manager = get_index_manager(self.workspace_path)
+            manager = get_index_manager(self.workspace_path, workspace_id=getattr(self, "workspace_id", None), revision_id=getattr(self, "revision_id", None))
             manager.attach_toolbox(self)
         assert self._graph_store is not None
         return self._graph_store
@@ -319,7 +324,7 @@ class Code2GuideToolbox:
 
     def index_workspace(self) -> Dict[str, Any]:
         """Full deep reindex: routes + forms/fields/buttons + i18n → graph + hybrid."""
-        manager = get_index_manager(self.workspace_path)
+        manager = get_index_manager(self.workspace_path, workspace_id=getattr(self, "workspace_id", None), revision_id=getattr(self, "revision_id", None))
         if self.hybrid_indexer is not None:
             manager.hybrid_indexer = self.hybrid_indexer
         result = manager.index_workspace(self, rebuild=True)
@@ -327,7 +332,7 @@ class Code2GuideToolbox:
 
     def ensure_indexed(self) -> Dict[str, Any]:
         """Use existing graph index when present; otherwise deep-index once."""
-        manager = get_index_manager(self.workspace_path)
+        manager = get_index_manager(self.workspace_path, workspace_id=getattr(self, "workspace_id", None), revision_id=getattr(self, "revision_id", None))
         if self.hybrid_indexer is not None:
             manager.hybrid_indexer = self.hybrid_indexer
         manager.attach_toolbox(self)
@@ -357,7 +362,7 @@ class Code2GuideToolbox:
         return result
 
     def index_status(self) -> Dict[str, Any]:
-        manager = get_index_manager(self.workspace_path)
+        manager = get_index_manager(self.workspace_path, workspace_id=getattr(self, "workspace_id", None), revision_id=getattr(self, "revision_id", None))
         if self.hybrid_indexer is not None:
             manager.hybrid_indexer = self.hybrid_indexer
         return manager.status()

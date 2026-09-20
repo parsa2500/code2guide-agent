@@ -37,9 +37,18 @@ class Code2GuideWorkflow:
         self,
         workspace_path: Optional[str] = None,
         toolbox: Optional[Code2GuideToolbox] = None,
+        *,
+        workspace_id: Optional[str] = None,
+        revision_id: Optional[str] = None,
     ):
         self.workspace_path = workspace_path or settings.target_workspace_path
-        self.toolbox = toolbox or Code2GuideToolbox(self.workspace_path)
+        self.workspace_id = workspace_id
+        self.revision_id = revision_id
+        self.toolbox = toolbox or Code2GuideToolbox(
+            self.workspace_path,
+            workspace_id=workspace_id,
+            revision_id=revision_id,
+        )
         self.normalizer = default_normalizer
         self.planner = QueryPlanner()
         self.compiled_graph = self._build_graph()
@@ -1022,8 +1031,18 @@ class Code2GuideAgent:
         self,
         workspace_path: Optional[str] = None,
         toolbox: Optional[Code2GuideToolbox] = None,
+        *,
+        workspace_id: Optional[str] = None,
+        revision_id: Optional[str] = None,
     ):
-        self.workflow = Code2GuideWorkflow(workspace_path, toolbox=toolbox)
+        self.workspace_id = workspace_id
+        self.revision_id = revision_id
+        self.workflow = Code2GuideWorkflow(
+            workspace_path,
+            toolbox=toolbox,
+            workspace_id=workspace_id,
+            revision_id=revision_id,
+        )
 
     def ask(
         self,

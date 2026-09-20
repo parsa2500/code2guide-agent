@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Dict, Optional, TYPE_CHECKING
 
 from src.core.config import settings
+from src.knowledge.contract import ensure_id_keyed_graph_migrated, set_graph_tombstone
 from src.knowledge.store import GraphStore, default_db_path
 from src.search.hybrid_indexer import HybridIndexer, collection_name_for_workspace
 
@@ -27,13 +28,42 @@ class WorkspaceIndexManager:
         workspace_path: str,
         hybrid_indexer: Optional[HybridIndexer] = None,
         graph_store: Optional[GraphStore] = None,
+        *,
+        workspace_id: Optional[str] = None,
+        revision_id: Optional[str] = None,
     ):
         self.workspace_path = str(Path(workspace_path).resolve())
+        self.workspace_id = workspace_id
+        self.revision_id = revision_id
         index_root = getattr(settings, "index_storage_path", None) or ".code2guide/index"
-        db_path = default_db_path(self.workspace_path, index_root=index_root)
-        self.graph_store = graph_store or GraphStore(self.workspace_path, db_path=db_path)
+
+        if workspace_id:
+            ensure_id_keyed_graph_migrated(
+                workspace_id=workspace_id,
+                workspace_path=self.workspace_path,
+                index_root=index_root,
+                revision_id=revision_id or "revision_0",
+            )
+
+        db_path = default_db_path(
+            self.workspace_path,
+            index_root=index_root,
+            workspace_id=workspace_id,
+            revision_id=None,
+        )
+        self.graph_store = graph_store or GraphStore(
+            self.workspace_path,
+            db_path=db_path,
+            workspace_id=workspace_id,
+            revision_id=revision_id,
+            index_root=index_root,
+        )
         self.hybrid_indexer = hybrid_indexer or HybridIndexer(
-            collection_name=collection_name_for_workspace(self.workspace_path),
+            collection_name=collection_name_for_workspace(
+                self.workspace_path,
+                workspace_id=workspace_id,
+                revision_id=revision_id,
+            ),
         )
         self._last_result: Optional[Dict] = None
 
@@ -46,15 +76,24 @@ class WorkspaceIndexManager:
         st = self.graph_store.status()
         st["use_vector"] = bool(self.hybrid_indexer.use_vector)
         st["collection_name"] = self.hybrid_indexer.collection_name
+        st["workspace_id"] = self.workspace_id
+        st["revision_id"] = self.revision_id or self.graph_store.get_meta("revision_id")
+        st["storage_mode"] = getattr(self.graph_store, "storage_mode", None)
         if self._last_result:
             st["last_result"] = self._last_result
         return st
+
+    def mark_tombstone(self, deleted: bool = True) -> None:
+        """Soft-delete: keep graph/vector files; stamp tombstone meta."""
+        set_graph_tombstone(self.graph_store, deleted=deleted)
 
     def attach_toolbox(self, toolbox: "Code2GuideToolbox") -> "Code2GuideToolbox":
         """Point toolbox at this manager's hybrid indexer and mark indexed if graph exists."""
         toolbox.hybrid_indexer = self.hybrid_indexer
         toolbox._graph_store = self.graph_store
         toolbox._index_manager = self
+        if self.workspace_id:
+            toolbox.workspace_id = self.workspace_id
         if self.is_indexed:
             # Rebuild in-memory fallback from graph so /ask works without Qdrant
             from src.knowledge.indexer import FrontendIndexer
@@ -157,6 +196,12 @@ class WorkspaceIndexManager:
         result.skipped_unchanged = False
 
         self.graph_store.mark_indexed(result.to_dict())
+        if self.workspace_id:
+            self.graph_store.set_meta("workspace_id", self.workspace_id)
+            self.graph_store.set_meta("workspace_path", self.workspace_path)
+            stats["workspace_id"] = self.workspace_id
+            stats["knowledge_key"] = "workspace_id"
+            result.stats = stats
         manifest.save()
         self._last_result = result.to_dict()
         toolbox._indexed = True
@@ -166,16 +211,33 @@ class WorkspaceIndexManager:
 def get_index_manager(
     workspace_path: Optional[str] = None,
     hybrid_indexer: Optional[HybridIndexer] = None,
+    *,
+    workspace_id: Optional[str] = None,
+    revision_id: Optional[str] = None,
 ) -> WorkspaceIndexManager:
-    """Return (and cache) the process-level manager for a workspace."""
+    """Return (and cache) process-level manager. Prefer workspace_id as cache key."""
     ws = str(Path(workspace_path or settings.target_workspace_path).resolve())
+    key = f"id:{workspace_id}" if workspace_id else f"path:{ws}"
     with _lock:
-        mgr = _managers.get(ws)
+        mgr = _managers.get(key)
         if mgr is None:
-            mgr = WorkspaceIndexManager(ws, hybrid_indexer=hybrid_indexer)
-            _managers[ws] = mgr
-        elif hybrid_indexer is not None:
-            mgr.hybrid_indexer = hybrid_indexer
+            mgr = WorkspaceIndexManager(
+                ws,
+                hybrid_indexer=hybrid_indexer,
+                workspace_id=workspace_id,
+                revision_id=revision_id,
+            )
+            _managers[key] = mgr
+        else:
+            if workspace_id and mgr.workspace_path != ws:
+                mgr.workspace_path = ws
+                mgr.graph_store.workspace_path = ws
+                try:
+                    mgr.graph_store.set_meta("workspace_path", ws)
+                except Exception:
+                    pass
+            if hybrid_indexer is not None:
+                mgr.hybrid_indexer = hybrid_indexer
         return mgr
 
 

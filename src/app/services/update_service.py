@@ -85,7 +85,13 @@ class UpdateService:
             raise NotFoundError("Workspace not found", code="WORKSPACE_NOT_FOUND")
 
     @staticmethod
-    def run_index_job(job_id: str, workspace_path: str, *, rebuild: bool) -> None:
+    def run_index_job(
+        job_id: str,
+        workspace_path: str,
+        *,
+        rebuild: bool,
+        workspace_id: str | None = None,
+    ) -> None:
         """Background worker: run knowledge indexer and finalize job in a fresh session."""
         factory = get_session_factory()
         db = factory()
@@ -103,8 +109,9 @@ class UpdateService:
                 from src.agent.tools import Code2GuideToolbox
                 from src.knowledge.manager import get_index_manager
 
-                toolbox = Code2GuideToolbox(workspace_path=workspace_path)
-                manager = get_index_manager(workspace_path)
+                wid = workspace_id or job.workspace_id
+                toolbox = Code2GuideToolbox(workspace_path=workspace_path, workspace_id=wid)
+                manager = get_index_manager(workspace_path, workspace_id=wid)
                 result = manager.index_workspace(toolbox, rebuild=rebuild)
                 summary = "ایندکس کامل شد"
                 detail = (
