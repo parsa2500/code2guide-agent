@@ -33,7 +33,18 @@ class DotNetEntityParser:
         entities: List[ParsedEntity] = []
         # Prefer files under Entities/Models or [Table] attribute
         lower_path = file_path.replace("\\", "/").lower()
-        likely = any(p in lower_path for p in ("/entities/", "/models/", "/domain/"))
+        likely = any(
+            p in lower_path
+            for p in (
+                "/entities/",
+                "/models/",
+                "/domain/",
+                "/bussinessentities/",  # typo used in Dargah
+                "/businessentities/",
+                "/baseentities/",
+                "/virtualentities/",
+            )
+        )
         has_table = "[Table" in content or "DbSet<" in content
 
         for m in re.finditer(

@@ -1,0 +1,11 @@
+<div id="sidebarNav">
+    <ul>
+        <li ng-class="ActiveAddress=='/contract/index'?'active':''">
+            <a ui-sref="Contract" href="#/Contract/Index">قراردادها</a>
+        </li>
+        <li>
+            <a ui-sref="ContractSign" href="#/Contract/Sign">امضای قرارداد</a>
+        </li>
+    </ul>
+</div>
+<div ui-view></div>

@@ -14,8 +14,8 @@
 | ساخت راهنمای UX فارسی | آماده (LLM یا template) |
 | ایندکس یک‌باره کل پروژه (فرانت) | آماده (`POST /index-workspace` + `src/knowledge/`) |
 | Hybrid / Qdrant در مسیر `/ask` | وصل؛ retrieval-first از گراف + بردار |
-| پارس بک‌اند (API / service / entity / DB) | آماده برای .NET (`src/parsers/dotnet/` + BackendIndexer) |
-| گراف رابطه فرانت ↔ بک | آماده (`CALLS_API` + `GET /api/v1/trace` + field `MAPS_TO`) |
+| پارس بک‌اند (API / service / entity / DB) | آماده برای .NET Core و ASP.NET MVC Framework (`src/parsers/dotnet/` + MvcApiParser + BackendIndexer) |
+| گراف رابطه فرانت ↔ بک | آماده (`CALLS_API` + `GET /api/v1/trace` + field `MAPS_TO`)؛ AngularJS `$http`/`$resource` هم پشتیبانی می‌شود |
 | Q&A آزاد روی کل سیستم | آماده — planner + tools + citations + golden set + incremental skip |
 
 **جمع‌بندی مبدأ:** فاز ۰ تا ۴ انجام شده — ایندکس فرانت+بک .NET، زنجیره end-to-end، Q&A با planner/استناد، و skip-unchanged.
@@ -161,7 +161,7 @@
 - مسیر workspace قابل دسترس برای سرویس (`TARGET_WORKSPACE_PATH` یا `workspace_path`)
 - برای کیفیت توضیح: `OPENROUTER_API_KEY` (اختیاری برای استخراج؛ مفید برای پاسخ)
 - برای semantic search: Qdrant (`docker compose up`) + در صورت نیاز `GOOGLE_API_KEY`
-- مشخص بودن استک بک‌اند هدف: **.NET** (پیاده‌سازی‌شده)؛ استک‌های دیگر بعداً به‌صورت پلاگین
+- مشخص بودن استک بک‌اند هدف: **.NET** (ASP.NET Core و ASP.NET MVC Framework + AngularJS ui-router پیاده‌سازی‌شده)؛ استک‌های دیگر بعداً به‌صورت پلاگین
 
 ---
 
@@ -191,3 +191,5 @@
 فاز ۰ تا ۴ پیاده‌سازی شده‌اند (`QueryPlanner`, ابزارهای cited، golden set، `FileHashManifest`).
 
 قدم بعدی (اختیاری): partial reindex per-file، watch daemon، یا پارسر استک غیر-.NET.
+
+لایهٔ ASP.NET MVC Framework + Razor + AngularJS ui-router اضافه شده (`MvcApiParser`, `RazorNgFormVisitor`, fixture در `sample_workspace/mvc_portal`).

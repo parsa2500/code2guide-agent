@@ -1,0 +1,7 @@
+<div class="contract-sign">
+    <label>{{IsRtl ? "رمز امضای دیجیتال" : "Signature Password"}}</label>
+    <input type="password" ng-model="model.Password" required />
+    <label>{{IsRtl ? "کد تایید پیامک" : "SMS Code"}}</label>
+    <input type="text" ng-model="model.OTP" />
+    <button type="button" ng-click="sign()">امضا</button>
+</div>

@@ -15,6 +15,7 @@ from src.search.hybrid_indexer import (
     IndexedItem,
 )
 from src.parsers.ast_visitor import JSXASTVisitor, UIField, DiscoveredForm, UIButton, ComponentInspection
+from src.parsers.razor_ng_visitor import RazorNgFormVisitor
 from src.parsers.route_extractor import RouteExtractor, RouteTree, RouteNode
 from src.parsers.alias_resolver import PathAliasResolver
 from src.parsers.i18n_parser import I18nParser
@@ -50,6 +51,7 @@ class Code2GuideToolbox:
         self.normalizer = default_normalizer
         self.lexical_engine = RipgrepLexicalEngine(self.workspace_path, normalizer=self.normalizer)
         self.ast_visitor = JSXASTVisitor(normalizer=self.normalizer)
+        self.razor_visitor = RazorNgFormVisitor(normalizer=self.normalizer)
         self.route_extractor = RouteExtractor(normalizer=self.normalizer)
         self.alias_resolver = PathAliasResolver(self.workspace_path)
         self.i18n_parser = I18nParser(self.workspace_path)
@@ -140,7 +142,11 @@ class Code2GuideToolbox:
             # Expand i18n t('...') before AST so labels become Persian literals
             prepared = self.i18n_parser.replace_i18n_calls(snippet)
             validation_rules = ValidationParser.extract_all(prepared)
-            inspection = self.ast_visitor.parse_source(prepared, file_path=file_path)
+            lower_path = file_path.lower()
+            if lower_path.endswith((".cshtml", ".html")):
+                inspection = self.razor_visitor.parse_source(prepared, file_path=file_path)
+            else:
+                inspection = self.ast_visitor.parse_source(prepared, file_path=file_path)
 
             # Merge schema/RHF required flags onto discovered fields
             self._merge_validation_into_forms(inspection.forms, validation_rules)

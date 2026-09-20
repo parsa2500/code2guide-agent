@@ -25,21 +25,30 @@ class FrontendApiCall(BaseModel):
 
 
 class FrontendApiTracer:
-    """Regex-based extraction of API calls from TS/JS sources."""
+    """Regex-based extraction of API calls from TS/JS / AngularJS sources."""
 
-    SKIP = DOTNET_SKIP_DIRS | {"__tests__", "coverage"}
+    SKIP = DOTNET_SKIP_DIRS | {"__tests__", "coverage", "Scripts", "lib", "fonts", "packages"}
     EXTS = (".ts", ".tsx", ".js", ".jsx")
+    VENDOR_HINTS = (".min.js", "jquery", "angular.min", "dx.", "bootstrap", "moment")
 
     def scan_workspace(self, workspace_path: str) -> List[FrontendApiCall]:
         root = Path(workspace_path).resolve()
         calls: List[FrontendApiCall] = []
         for dirpath, dirnames, filenames in os.walk(root):
             dirnames[:] = [d for d in dirnames if d not in self.SKIP]
+            norm = dirpath.replace("\\", "/")
+            if any(x in norm for x in ("/Scripts/", "/lib/", "/Contents/Portal/js", "/fonts/")):
+                continue
             for name in filenames:
-                if not name.lower().endswith(self.EXTS):
+                lower = name.lower()
+                if not lower.endswith(self.EXTS):
+                    continue
+                if any(h in lower for h in self.VENDOR_HINTS):
                     continue
                 path = Path(dirpath) / name
                 try:
+                    if path.stat().st_size > 3_000_000:
+                        continue
                     content = path.read_text(encoding="utf-8", errors="replace")
                 except Exception:
                     continue
@@ -55,6 +64,7 @@ class FrontendApiTracer:
         calls.extend(self._parse_fetch(content, file_path))
         calls.extend(self._parse_axios(content, file_path))
         calls.extend(self._parse_react_query_style(content, file_path))
+        calls.extend(self._parse_angular_http(content, file_path))
         return calls
 
     def _parse_fetch(self, content: str, file_path: str) -> List[FrontendApiCall]:
@@ -153,6 +163,68 @@ class FrontendApiTracer:
                     url_normalized=self.normalize_url(url_raw),
                     line_number=line,
                     kind="react_query",
+                )
+            )
+        return out
+
+    def _parse_angular_http(self, content: str, file_path: str) -> List[FrontendApiCall]:
+        """Extract $http.get/post/... and $resource('/odata/...')."""
+        out: List[FrontendApiCall] = []
+        for m in re.finditer(
+            r"""\$http\.(?P<method>get|post|put|delete|patch)\s*\(\s*(['"`])(?P<url>.*?)\2""",
+            content,
+            re.I,
+        ):
+            method = m.group("method").upper()
+            url_raw = m.group("url")
+            line = content[: m.start()].count("\n") + 1
+            out.append(
+                FrontendApiCall(
+                    file_path=file_path,
+                    method=method,
+                    url_raw=url_raw,
+                    url_normalized=self.normalize_url(url_raw),
+                    line_number=line,
+                    kind="angular_http",
+                )
+            )
+        for m in re.finditer(
+            r"""\$http\s*\(\s*\{(?P<body>[^{}]*)\}""",
+            content,
+            re.DOTALL,
+        ):
+            body = m.group("body")
+            url_m = re.search(r"""url\s*:\s*['"`]([^'"`]+)['"`]""", body)
+            method_m = re.search(r"""method\s*:\s*['"`](\w+)['"`]""", body, re.I)
+            if not url_m:
+                continue
+            url_raw = url_m.group(1)
+            method = (method_m.group(1).upper() if method_m else "GET")
+            line = content[: m.start()].count("\n") + 1
+            out.append(
+                FrontendApiCall(
+                    file_path=file_path,
+                    method=method,
+                    url_raw=url_raw,
+                    url_normalized=self.normalize_url(url_raw),
+                    line_number=line,
+                    kind="angular_http",
+                )
+            )
+        for m in re.finditer(
+            r"""\$resource\s*\(\s*(['"`])(?P<url>.*?)\1""",
+            content,
+        ):
+            url_raw = m.group("url")
+            line = content[: m.start()].count("\n") + 1
+            out.append(
+                FrontendApiCall(
+                    file_path=file_path,
+                    method="GET",
+                    url_raw=url_raw,
+                    url_normalized=self.normalize_url(url_raw),
+                    line_number=line,
+                    kind="angular_resource",
                 )
             )
         return out

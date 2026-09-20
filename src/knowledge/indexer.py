@@ -76,7 +76,7 @@ class IndexResult:
 class FrontendIndexer:
     """Full-workspace frontend deep index without artificial file caps."""
 
-    UI_EXTS = (".tsx", ".jsx", ".vue")
+    UI_EXTS = (".tsx", ".jsx", ".vue", ".cshtml", ".html")
 
     def __init__(self, toolbox: "Code2GuideToolbox", store: GraphStore):
         self.toolbox = toolbox
@@ -411,9 +411,16 @@ class FrontendIndexer:
                     files.update(self._imports_from_file(resolved, ws_root))
 
         # Also include all page/view UI files under common dirs (still no hard 6-cap)
-        for pattern in ("**/pages/**/*.tsx", "**/pages/**/*.jsx", "**/views/**/*.tsx", "**/views/**/*.jsx"):
+        for pattern in (
+            "**/pages/**/*.tsx",
+            "**/pages/**/*.jsx",
+            "**/views/**/*.tsx",
+            "**/views/**/*.jsx",
+            "**/Views/**/*.cshtml",
+            "**/ng-templates/**/*.html",
+        ):
             for p in ws_root.glob(pattern):
-                if any(skip in str(p) for skip in ("node_modules", ".git", "dist", "build")):
+                if any(skip in str(p) for skip in ("node_modules", ".git", "dist", "build", "bin", "obj")):
                     continue
                 try:
                     files.add(str(p.relative_to(ws_root)).replace("\\", "/"))

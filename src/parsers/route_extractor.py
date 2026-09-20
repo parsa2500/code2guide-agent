@@ -68,9 +68,25 @@ class RouteExtractor:
             if r.component_name:
                 comp_map[r.component_name] = r
 
+        angular_routes = self._scan_angularjs_ui_router(root)
+        for r in angular_routes:
+            if r.path not in path_map:
+                routes.append(r)
+                path_map[r.path] = r
+            else:
+                existing = path_map[r.path]
+                if r.title and not existing.title:
+                    existing.title = r.title
+                if r.file_path and not existing.file_path:
+                    existing.file_path = r.file_path
+                if r.component_name and not existing.component_name:
+                    existing.component_name = r.component_name
+            if r.component_name:
+                comp_map[r.component_name] = path_map[r.path]
+
         for dirpath, _, filenames in os.walk(root):
             norm_dir = dirpath.replace("\\", "/")
-            if any(p in norm_dir for p in ["/node_modules", "/.git", "/.next", "/dist", "/build"]):
+            if any(p in norm_dir for p in ["/node_modules", "/.git", "/.next", "/dist", "/build", "/bin", "/obj", "/Scripts"]):
                 continue
 
             for fname in filenames:
@@ -115,6 +131,165 @@ class RouteExtractor:
             component_to_route=comp_map,
             path_to_route=path_map
         )
+
+    def _scan_angularjs_ui_router(self, root: Path) -> List[RouteNode]:
+        """Extract ui-router .state definitions and ui-sref menu items from MVC+AngularJS apps."""
+        routes: List[RouteNode] = []
+        path_map: Dict[str, RouteNode] = {}
+        title_by_sref: Dict[str, str] = {}
+
+        # Layout menu titles: <a ui-sref="Contract" ...>عنوان</a>
+        for layout in list(root.glob("**/Views/_Layout*.cshtml")) + list(root.glob("**/Views/**/_Layout*.cshtml")):
+            try:
+                text = layout.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                continue
+            for m in re.finditer(
+                r"""ui-sref\s*=\s*["'](?P<state>[^"']+)["'][^>]*>(?P<label>.*?)</a>""",
+                text,
+                re.I | re.DOTALL,
+            ):
+                state = m.group("state").split("(")[0].strip()
+                label = re.sub(r"<[^>]+>", "", m.group("label"))
+                label = re.sub(r"\{\{[^}]+\}\}", "", label)
+                label = re.sub(r"\s+", " ", label).strip()
+                if state and label and len(label) < 80:
+                    title_by_sref[state] = label
+            # Also ActiveAddress=='/contract/index'
+            for m in re.finditer(
+                r"""ActiveAddress\s*==\s*['"](?P<path>/[^'"]+)['"][^>]*>.*?ui-sref\s*=\s*["'](?P<state>[^"']+)["']""",
+                text,
+                re.I | re.DOTALL,
+            ):
+                state = m.group("state").split("(")[0].strip()
+                # reverse: sometimes ui-sref before ActiveAddress — handled by first loop
+                _ = state
+
+        skip_parts = ("/node_modules/", "/bin/", "/obj/", "/Scripts/", "/lib/", "/packages/")
+        js_candidates: List[Path] = []
+        for pattern in (
+            "**/Contents/angularjs/*.js",
+            "**/angularjs/*.js",
+            "**/Scripts/app*.js",
+            "**/app.js",
+            "**/mvc_portal/**/*.js",
+        ):
+            js_candidates.extend(root.glob(pattern))
+
+        # Also scan reasonably sized JS under Contents that mention $stateProvider
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [
+                d
+                for d in dirnames
+                if d not in ("node_modules", ".git", "bin", "obj", "Scripts", "lib", "packages", "fonts")
+            ]
+            norm = dirpath.replace("\\", "/")
+            if any(s.strip("/") in norm for s in ("Scripts", "lib", "node_modules")):
+                continue
+            for name in filenames:
+                if not name.lower().endswith(".js"):
+                    continue
+                if name.lower().endswith((".min.js", ".bundle.js")):
+                    continue
+                p = Path(dirpath) / name
+                try:
+                    if p.stat().st_size > 5_000_000:
+                        continue
+                except OSError:
+                    continue
+                js_candidates.append(p)
+
+        seen_files = set()
+        for js_path in js_candidates:
+            key = str(js_path.resolve())
+            if key in seen_files:
+                continue
+            seen_files.add(key)
+            rel_js = str(js_path.relative_to(root)).replace("\\", "/")
+            if any(s in ("/" + rel_js).replace("\\", "/") for s in skip_parts):
+                continue
+            try:
+                content = js_path.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                continue
+            if "$stateProvider" not in content and ".state(" not in content:
+                continue
+
+            for m in re.finditer(
+                r"""\.state\s*\(\s*['"](?P<name>[^'"]+)['"]\s*,\s*\{(?P<body>.*?)\}\s*\)""",
+                content,
+                re.DOTALL,
+            ):
+                name = m.group("name")
+                body = m.group("body")
+                url_m = re.search(r"""url\s*:\s*['"]([^'"]+)['"]""", body)
+                tpl_m = re.search(r"""templateUrl\s*:\s*['"]([^'"]+)['"]""", body)
+                ctrl_m = re.search(r"""controller\s*:\s*['"]([^'"]+)['"]""", body)
+                url = url_m.group(1) if url_m else f"/{name}"
+                if not url.startswith("/"):
+                    url = "/" + url
+                template_url = tpl_m.group(1) if tpl_m else ""
+                controller = ctrl_m.group(1) if ctrl_m else name
+
+                file_path = self._resolve_mvc_template(root, template_url)
+                title = title_by_sref.get(name) or name
+                node = RouteNode(
+                    path=url,
+                    title=title,
+                    component_name=controller,
+                    file_path=file_path,
+                    breadcrumbs=["صفحه اصلی", title],
+                )
+                if url not in path_map:
+                    path_map[url] = node
+                    routes.append(node)
+                else:
+                    existing = path_map[url]
+                    if title and (not existing.title or existing.title == name):
+                        existing.title = title
+                    if file_path and not existing.file_path:
+                        existing.file_path = file_path
+
+        return routes
+
+    def _resolve_mvc_template(self, root: Path, template_url: str) -> Optional[str]:
+        """Map templateUrl '/Contract/Index' → Views/Contract/Index.cshtml when present."""
+        if not template_url:
+            return None
+        tpl = template_url.strip()
+        # ng-templates
+        if "ng-templates" in tpl.lower() or tpl.lower().endswith(".html"):
+            candidates = [
+                tpl.lstrip("/"),
+                "ng-templates/" + Path(tpl).name,
+            ]
+            for c in candidates:
+                p = root / c
+                if p.is_file():
+                    return str(p.relative_to(root)).replace("\\", "/")
+            # Search by filename
+            name = Path(tpl).name
+            for found in root.glob(f"**/ng-templates/{name}"):
+                return str(found.relative_to(root)).replace("\\", "/")
+            return tpl.lstrip("/")
+
+        # /Controller/Action → Views/Controller/Action.cshtml
+        parts = [p for p in tpl.strip("/").split("/") if p]
+        if len(parts) >= 2:
+            controller, action = parts[0], parts[1]
+            rel = f"Views/{controller}/{action}.cshtml"
+            if (root / rel).is_file():
+                return rel
+            # case-insensitive search
+            views = root / "Views"
+            if views.is_dir():
+                for p in views.rglob(f"{action}.cshtml"):
+                    if p.parent.name.lower() == controller.lower():
+                        return str(p.relative_to(root)).replace("\\", "/")
+            # Also under mvc_portal/Views
+            for p in root.glob(f"**/Views/{controller}/{action}.cshtml"):
+                return str(p.relative_to(root)).replace("\\", "/")
+        return None
 
     def _scan_nextjs_routes(self, root: Path) -> List[RouteNode]:
         routes: List[RouteNode] = []

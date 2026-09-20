@@ -1,0 +1,8 @@
+<div class="contract-list">
+    <h2>لیست قراردادها</h2>
+    <label for="title">عنوان قرارداد</label>
+    <input id="title" type="text" class="form-control" ng-model="model.Title" required />
+    <label>{{IsRtl ? "شماره قرارداد" : "Contract Number"}}</label>
+    <input type="text" ng-model="model.ContractNumber" />
+    <button type="submit" ng-click="save()">ثبت</button>
+</div>

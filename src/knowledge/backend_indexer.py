@@ -14,6 +14,7 @@ from src.parsers.dotnet import (
     DotNetEntityParser,
     DotNetMigrationParser,
     DotNetServiceParser,
+    MvcApiParser,
 )
 from src.search.hybrid_indexer import IndexedItem
 
@@ -67,11 +68,16 @@ class BackendIndexer:
                 unique_files.append(f)
 
         api_parser = DotNetApiParser()
+        mvc_parser = MvcApiParser()
         svc_parser = DotNetServiceParser()
         ent_parser = DotNetEntityParser()
         mig_parser = DotNetMigrationParser()
 
         endpoints = api_parser.parse_paths(unique_files, self.workspace_root)
+        if detection.is_mvc_framework:
+            mvc_eps = mvc_parser.parse_paths(unique_files, self.workspace_root)
+            endpoints = self._merge_endpoints(endpoints, mvc_eps)
+            stats["mvc_endpoints"] = len(mvc_eps)
         services = svc_parser.parse_paths(unique_files, self.workspace_root)
         entities = ent_parser.parse_paths(unique_files, self.workspace_root)
         tables = mig_parser.parse_paths(unique_files, self.workspace_root)
@@ -385,5 +391,19 @@ class BackendIndexer:
             "cs_files": len(unique_files),
             "stats": stats,
             "skipped": False,
+            "is_mvc_framework": detection.is_mvc_framework,
         }
         return result
+
+    @staticmethod
+    def _merge_endpoints(core_eps, mvc_eps):
+        """Dedupe by (method, path, file_path); prefer Core entries when both exist."""
+        seen_soft = set()
+        out = []
+        for ep in list(core_eps) + list(mvc_eps):
+            soft = ((ep.method or "GET").upper(), ep.path or "", ep.file_path or "")
+            if soft in seen_soft:
+                continue
+            seen_soft.add(soft)
+            out.append(ep)
+        return out
