@@ -3,7 +3,14 @@ import { Link } from "react-router-dom";
 import BackButton, { HubLink } from "../components/BackButton";
 import AgentFormModal from "../components/AgentFormModal";
 import type { AgentInput, AgentKind, AgentOut } from "../api/agents";
-import { createAgent, getAgent, listAgents, patchAgent, setAgentPublished } from "../api/agents";
+import {
+  createAgent,
+  getAgent,
+  listAgents,
+  overlayAgent,
+  patchAgent,
+  publishAgent,
+} from "../api/agents";
 
 const KIND_LABEL: Record<AgentKind, string> = {
   jarvis: "جارویس",
@@ -64,7 +71,17 @@ export default function AgentsPage() {
       if (mode === "create") {
         await createAgent(input);
       } else if (editing) {
-        await patchAgent(editing.id, input);
+        await patchAgent(editing.id, {
+          name: input.name,
+          kind: input.kind,
+          policy: input.policy,
+          reject_text: input.reject_text,
+          clarify_first: input.clarify_first,
+          settings_schema: input.settings_schema,
+        });
+        if (input.published !== editing.published) {
+          await publishAgent(editing.id, input.published);
+        }
       }
       setModalOpen(false);
       await refresh();
@@ -79,8 +96,11 @@ export default function AgentsPage() {
     setPendingId(agent.id);
     setError(null);
     try {
-      const next = await setAgentPublished(agent.id, !agent.published);
-      setItems((prev) => prev.map((item) => (item.id === next.id ? next : item)));
+      const requested = !agent.published;
+      const raw = await publishAgent(agent.id, requested);
+      setItems((prev) =>
+        prev.map((item) => (item.id === agent.id ? overlayAgent(item, raw) : item)),
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -148,8 +168,8 @@ export default function AgentsPage() {
                   </p>
                   <p className="ws-card-desc">
                     {agent.clarify_first ? "اول شفاف‌سازی" : "بدون شفاف‌سازی اجباری"}
-                    {agent.system_policy
-                      ? ` — ${agent.system_policy.slice(0, 80)}${agent.system_policy.length > 80 ? "…" : ""}`
+                    {agent.policy
+                      ? ` — ${agent.policy.slice(0, 80)}${agent.policy.length > 80 ? "…" : ""}`
                       : ""}
                   </p>
                 </button>

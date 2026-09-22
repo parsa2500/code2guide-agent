@@ -28,9 +28,10 @@ export default function AgentFormModal({
   onClose,
   onSubmit,
 }: Props) {
+  const [id, setId] = useState("");
   const [name, setName] = useState("");
   const [kind, setKind] = useState<AgentKind>("custom");
-  const [systemPolicy, setSystemPolicy] = useState("");
+  const [policy, setPolicy] = useState("");
   const [rejectText, setRejectText] = useState("");
   const [clarifyFirst, setClarifyFirst] = useState(false);
   const [published, setPublished] = useState(false);
@@ -39,9 +40,10 @@ export default function AgentFormModal({
 
   useEffect(() => {
     if (!open) return;
+    setId("");
     setName(initial?.name ?? "");
     setKind(initial?.kind ?? "custom");
-    setSystemPolicy(initial?.system_policy ?? "");
+    setPolicy(initial?.policy ?? "");
     setRejectText(initial?.reject_text ?? "");
     setClarifyFirst(initial?.clarify_first ?? false);
     setPublished(initial?.published ?? false);
@@ -60,15 +62,17 @@ export default function AgentFormModal({
       return;
     }
     setSchemaError(null);
-    onSubmit({
+    const next: AgentInput = {
       name: name.trim(),
       kind,
-      system_policy: systemPolicy,
+      policy,
       reject_text: rejectText,
       clarify_first: clarifyFirst,
       published,
       settings_schema,
-    });
+    };
+    if (mode === "create" && id.trim()) next.id = id.trim();
+    onSubmit(next);
   }
 
   return (
@@ -89,6 +93,22 @@ export default function AgentFormModal({
       }
     >
       <form id="agent-form" className="form-grid" onSubmit={handleSubmit}>
+        {mode === "create" ? (
+          <div className="flap">
+            <label className="flap-label" htmlFor="agent-id">
+              شناسه
+            </label>
+            <input
+              id="agent-id"
+              value={id}
+              onChange={(e) => setId(e.target.value)}
+              dir="ltr"
+              spellCheck={false}
+              disabled={busy}
+              placeholder="اختیاری — خالی یعنی سرور بسازد"
+            />
+          </div>
+        ) : null}
         <div className="flap">
           <label className="flap-label" htmlFor="agent-name">
             نام
@@ -121,12 +141,12 @@ export default function AgentFormModal({
         </div>
         <div className="flap">
           <label className="flap-label" htmlFor="agent-policy">
-            سیستم / سیاست
+            سیاست
           </label>
           <textarea
             id="agent-policy"
-            value={systemPolicy}
-            onChange={(e) => setSystemPolicy(e.target.value)}
+            value={policy}
+            onChange={(e) => setPolicy(e.target.value)}
             rows={5}
             disabled={busy}
             placeholder="دستور سیستم و سیاست پاسخ‌گویی"
