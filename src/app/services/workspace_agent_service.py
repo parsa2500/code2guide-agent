@@ -161,7 +161,9 @@ class WorkspaceAgentService:
 
         # Brain tools path
         try:
-            hits = brain_tools.search(self.db, workspace_id, cleaned, k=5)
+            k = int(effective.get("max_hits", 5) or 5)
+            k = max(1, min(k, 20))
+            hits = brain_tools.search(self.db, workspace_id, cleaned, k=k)
         except NotFoundError:
             raise
         except Exception as exc:  # noqa: BLE001

@@ -30,6 +30,13 @@ from src.db.models.workspace_agent import WorkspaceAgent
 from sqlalchemy import select
 
 
+# Slice-2 demo: overridable keys so WS agent-settings tab is not empty.
+DEFAULT_SEED_SETTINGS_SCHEMA = {
+    "clarify_first": {"default": False, "workspace_overridable": True},
+    "max_hits": {"default": 5, "workspace_overridable": True},
+    "policy_text": {"default": "", "workspace_overridable": True},
+}
+
 SEED_SPECS = (
     {
         "id": DEFAULT_AGENT_JARVIS_ID,
@@ -72,7 +79,7 @@ def ensure_seed_agents(db: Session) -> None:
                     reject_text="",
                     clarify_first=False,
                     published=True,
-                    settings_schema={},
+                    settings_schema=dict(DEFAULT_SEED_SETTINGS_SCHEMA),
                     created_at=now,
                     updated_at=now,
                 )
@@ -84,6 +91,7 @@ def ensure_seed_agents(db: Session) -> None:
                 name=spec["name"],
                 kind=spec["kind"],
                 published=True,
+                settings_schema=dict(DEFAULT_SEED_SETTINGS_SCHEMA),
                 updated_at=now,
             )
     db.flush()
