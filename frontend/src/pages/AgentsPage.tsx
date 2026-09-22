@@ -7,7 +7,6 @@ import {
   createAgent,
   getAgent,
   listAgents,
-  overlayAgent,
   patchAgent,
   publishAgent,
 } from "../api/agents";
@@ -97,10 +96,8 @@ export default function AgentsPage() {
     setError(null);
     try {
       const requested = !agent.published;
-      const raw = await publishAgent(agent.id, requested);
-      setItems((prev) =>
-        prev.map((item) => (item.id === agent.id ? overlayAgent(item, raw) : item)),
-      );
+      const next = await publishAgent(agent.id, requested);
+      setItems((prev) => prev.map((item) => (item.id === agent.id ? next : item)));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {

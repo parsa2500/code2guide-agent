@@ -1,16 +1,16 @@
 /**
  * Global agent registry + workspace agent bindings.
  *
- * Locked contract (all under `/api/v1`):
+ * Live wire (`src/api/schemas/agents.py`, shell routes):
  * - `GET/POST /api/v1/agents`
- * - `GET/PATCH /api/v1/agents/{id}`
- * - `POST /api/v1/agents/{id}/publish` body `{ published }`
+ * - `GET/PATCH /api/v1/agents/{agent_id}`
+ * - `POST /api/v1/agents/{agent_id}/publish` body `{ published }`
  * - `GET/POST /api/v1/workspaces/{ws_id}/agents`
- * - `PATCH/DELETE /api/v1/workspaces/{ws_id}/agents/{id}`
- * - `POST /api/v1/workspaces/{ws_id}/agents/{id}/chat` body `{ message }`
+ * - `PATCH/DELETE /api/v1/workspaces/{ws_id}/agents/{agent_id}`
+ * - `POST /api/v1/workspaces/{ws_id}/agents/{agent_id}/chat` body `{ message }`
  *
- * Agent body: `id?`, `name`, `kind`, `policy`, `reject_text`, `clarify_first`,
- * `settings_schema`, `published`.
+ * Wire field is `policy_text`. UI state keeps the friendly name `policy`.
+ * List envelope is `{ items, total }` (no limit/offset).
  * Seed ids `jarvis`, `bot_user`, `bot_tech` are owned by the backend.
  */
 
@@ -29,11 +29,14 @@ export interface AgentOut {
   id: string;
   name: string;
   kind: AgentKind;
+  /** UI-facing policy text; wire name is `policy_text`. */
   policy: string;
   reject_text: string;
   clarify_first: boolean;
   published: boolean;
   settings_schema: SettingsSchema;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface AgentInput {
@@ -50,21 +53,30 @@ export interface AgentInput {
 export interface AgentListOut {
   items: AgentOut[];
   total: number;
-  limit: number;
-  offset: number;
 }
 
-/** Row from `GET /api/v1/workspaces/{ws_id}/agents`. */
+/** Row from `GET /api/v1/workspaces/{ws_id}/agents` — key is `agent_id`. */
 export interface WorkspaceAgentBinding {
-  id: string;
+  workspace_id: string;
   agent_id: string;
   enabled: boolean;
   overrides: Record<string, unknown>;
+  effective_settings: Record<string, unknown>;
+  definition?: AgentOut | null;
 }
 
 export interface WorkspaceAgentPatch {
   enabled?: boolean;
   overrides?: Record<string, unknown>;
+}
+
+export interface AgentChatOut {
+  agent_id: string;
+  answer: string;
+  clarify: boolean;
+  rejected: boolean;
+  hits: Record<string, unknown>[];
+  effective_settings: Record<string, unknown>;
 }
 
 const KINDS: readonly AgentKind[] = ["jarvis", "end_user", "technical", "custom"];
@@ -73,6 +85,19 @@ function isKind(value: unknown): value is AgentKind {
   return typeof value === "string" && (KINDS as readonly string[]).includes(value);
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function readPolicy(row: Record<string, unknown>): string {
+  if (typeof row.policy_text === "string") return row.policy_text;
+  if (typeof row.policy === "string") return row.policy;
+  return "";
+}
+
+/** Strict parse for form submit — backend expects key → {default, workspace_overridable}. */
 export function parseSettingsSchema(text: string): SettingsSchema {
   const trimmed = text.trim();
   if (!trimmed) return {};
@@ -109,10 +134,32 @@ export function formatSettingsSchema(schema: SettingsSchema | undefined): string
   return `${JSON.stringify(schema, null, 2)}\n`;
 }
 
-function readSchema(raw: unknown): SettingsSchema | undefined {
-  if (typeof raw === "string") return parseSettingsSchema(raw);
-  if (raw && typeof raw === "object") return parseSettingsSchema(JSON.stringify(raw));
-  return undefined;
+/** Lenient response parse — empty `{}` and well-formed keys; ignore unknown shapes. */
+function readSchema(raw: unknown): SettingsSchema {
+  if (raw == null) return {};
+  let parsed: unknown = raw;
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (!trimmed) return {};
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      return {};
+    }
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+  const out: SettingsSchema = {};
+  for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+    if (!key.trim()) continue;
+    if (value === null || typeof value !== "object" || Array.isArray(value)) continue;
+    const field = value as Record<string, unknown>;
+    if (!("default" in field) || typeof field.workspace_overridable !== "boolean") continue;
+    out[key] = {
+      default: field.default,
+      workspace_overridable: field.workspace_overridable,
+    };
+  }
+  return out;
 }
 
 function normalizeAgent(raw: unknown, fallbackId?: string): AgentOut {
@@ -126,61 +173,81 @@ function normalizeAgent(raw: unknown, fallbackId?: string): AgentOut {
     id,
     name: typeof row.name === "string" ? row.name : id,
     kind: isKind(row.kind) ? row.kind : "custom",
-    policy: typeof row.policy === "string" ? row.policy : "",
+    policy: readPolicy(row),
     reject_text: typeof row.reject_text === "string" ? row.reject_text : "",
     clarify_first: Boolean(row.clarify_first),
     published: Boolean(row.published),
-    settings_schema: readSchema(row.settings_schema) ?? {},
+    settings_schema: readSchema(row.settings_schema),
+    created_at: typeof row.created_at === "string" ? row.created_at : undefined,
+    updated_at: typeof row.updated_at === "string" ? row.updated_at : undefined,
   };
 }
 
-/** Keep fields the response omitted (publish may return only `{ published }`). */
+/** Overlay partial responses onto a known agent (publish always returns full Out). */
 export function overlayAgent(current: AgentOut, raw: unknown): AgentOut {
   if (!raw || typeof raw !== "object") return current;
   const row = raw as Record<string, unknown>;
-  const schema = readSchema(row.settings_schema);
+  const policy =
+    typeof row.policy_text === "string" || typeof row.policy === "string"
+      ? readPolicy(row)
+      : current.policy;
   return {
     ...current,
     id: typeof row.id === "string" && row.id ? row.id : current.id,
     name: typeof row.name === "string" ? row.name : current.name,
     kind: isKind(row.kind) ? row.kind : current.kind,
-    policy: typeof row.policy === "string" ? row.policy : current.policy,
+    policy,
     reject_text: typeof row.reject_text === "string" ? row.reject_text : current.reject_text,
     clarify_first: typeof row.clarify_first === "boolean" ? row.clarify_first : current.clarify_first,
     published: typeof row.published === "boolean" ? row.published : current.published,
-    settings_schema: schema ?? current.settings_schema,
+    settings_schema:
+      row.settings_schema !== undefined ? readSchema(row.settings_schema) : current.settings_schema,
+    created_at: typeof row.created_at === "string" ? row.created_at : current.created_at,
+    updated_at: typeof row.updated_at === "string" ? row.updated_at : current.updated_at,
   };
 }
 
 function normalizeList(data: unknown): AgentListOut {
   if (Array.isArray(data)) {
     const items = data.map((row) => normalizeAgent(row));
-    return { items, total: items.length, limit: items.length, offset: 0 };
+    return { items, total: items.length };
   }
-  if (data && typeof data === "object" && Array.isArray((data as AgentListOut).items)) {
-    const body = data as AgentListOut;
+  if (data && typeof data === "object" && Array.isArray((data as { items?: unknown }).items)) {
+    const body = data as { items: unknown[]; total?: number };
     const items = body.items.map((row) => normalizeAgent(row));
     return {
       items,
       total: typeof body.total === "number" ? body.total : items.length,
-      limit: typeof body.limit === "number" ? body.limit : items.length,
-      offset: typeof body.offset === "number" ? body.offset : 0,
     };
   }
   throw new Error("فهرست ایجنت‌ها شکل مورد انتظار را ندارد.");
 }
 
-function agentBody(input: AgentInput): Record<string, unknown> {
+/** Wire body — always `policy_text`, never bare `policy`. */
+function agentCreateBody(input: AgentInput): Record<string, unknown> {
   const body: Record<string, unknown> = {
     name: input.name,
     kind: input.kind,
-    policy: input.policy,
+    policy_text: input.policy,
     reject_text: input.reject_text,
     clarify_first: input.clarify_first,
     settings_schema: input.settings_schema,
     published: input.published,
   };
   if (input.id?.trim()) body.id = input.id.trim();
+  return body;
+}
+
+function agentPatchBody(
+  input: Partial<Omit<AgentInput, "id" | "published">>,
+): Record<string, unknown> {
+  const body: Record<string, unknown> = {};
+  if (input.name !== undefined) body.name = input.name;
+  if (input.kind !== undefined) body.kind = input.kind;
+  if (input.policy !== undefined) body.policy_text = input.policy;
+  if (input.reject_text !== undefined) body.reject_text = input.reject_text;
+  if (input.clarify_first !== undefined) body.clarify_first = input.clarify_first;
+  if (input.settings_schema !== undefined) body.settings_schema = input.settings_schema;
   return body;
 }
 
@@ -198,7 +265,7 @@ export function getAgent(id: string): Promise<AgentOut> {
 export function createAgent(input: AgentInput): Promise<AgentOut> {
   return apiFetch<unknown>("/api/v1/agents", {
     method: "POST",
-    body: JSON.stringify(agentBody(input)),
+    body: JSON.stringify(agentCreateBody(input)),
   }).then((raw) => normalizeAgent(raw, input.id));
 }
 
@@ -208,49 +275,55 @@ export function patchAgent(
 ): Promise<AgentOut> {
   return apiFetch<unknown>(`/api/v1/agents/${encodeURIComponent(id)}`, {
     method: "PATCH",
-    body: JSON.stringify(input),
+    body: JSON.stringify(agentPatchBody(input)),
   }).then((raw) => normalizeAgent(raw, id));
 }
 
-/** Internal publish flag. `POST /api/v1/agents/{id}/publish`. */
-export async function publishAgent(id: string, published: boolean): Promise<unknown> {
+/** Internal publish flag. `POST /api/v1/agents/{agent_id}/publish`. */
+export async function publishAgent(id: string, published: boolean): Promise<AgentOut> {
   const data = await apiFetch<unknown>(`/api/v1/agents/${encodeURIComponent(id)}/publish`, {
     method: "POST",
     body: JSON.stringify({ published }),
   });
-  return data ?? { id, published };
+  return normalizeAgent(data, id);
 }
 
-function wsAgentsPath(workspaceId: string, id?: string): string {
+function wsAgentsPath(workspaceId: string, agentId?: string): string {
   const base = `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/agents`;
-  return id ? `${base}/${encodeURIComponent(id)}` : base;
+  return agentId ? `${base}/${encodeURIComponent(agentId)}` : base;
 }
 
-function normalizeBinding(raw: unknown): WorkspaceAgentBinding {
+function normalizeBinding(raw: unknown, fallbackWorkspaceId?: string): WorkspaceAgentBinding {
   if (raw === null || typeof raw !== "object") {
     throw new Error("اتصال ایجنت نامعتبر است.");
   }
   const row = raw as Record<string, unknown>;
-  const id = typeof row.id === "string" ? row.id : "";
-  const agentId = typeof row.agent_id === "string" ? row.agent_id : id;
-  if (!id && !agentId) throw new Error("اتصال ایجنت بدون شناسه است.");
-  const overrides =
-    row.overrides && typeof row.overrides === "object" && !Array.isArray(row.overrides)
-      ? (row.overrides as Record<string, unknown>)
-      : {};
+  const agentId = typeof row.agent_id === "string" ? row.agent_id : "";
+  if (!agentId) throw new Error("اتصال ایجنت بدون agent_id است.");
+  const definition =
+    row.definition && typeof row.definition === "object"
+      ? normalizeAgent(row.definition, agentId)
+      : null;
   return {
-    id: id || agentId,
+    workspace_id:
+      typeof row.workspace_id === "string" && row.workspace_id
+        ? row.workspace_id
+        : fallbackWorkspaceId || "",
     agent_id: agentId,
     enabled: typeof row.enabled === "boolean" ? row.enabled : true,
-    overrides,
+    overrides: asRecord(row.overrides),
+    effective_settings: asRecord(row.effective_settings),
+    definition,
   };
 }
 
 export async function listWorkspaceAgents(workspaceId: string): Promise<WorkspaceAgentBinding[]> {
   const data = await apiFetch<unknown>(wsAgentsPath(workspaceId));
-  if (Array.isArray(data)) return data.map(normalizeBinding);
+  if (Array.isArray(data)) {
+    return data.map((row) => normalizeBinding(row, workspaceId));
+  }
   if (data && typeof data === "object" && Array.isArray((data as { items?: unknown[] }).items)) {
-    return (data as { items: unknown[] }).items.map(normalizeBinding);
+    return (data as { items: unknown[] }).items.map((row) => normalizeBinding(row, workspaceId));
   }
   throw new Error("فهرست ایجنت‌های workspace شکل مورد انتظار را ندارد.");
 }
@@ -262,31 +335,30 @@ export function attachWorkspaceAgent(
   return apiFetch<unknown>(wsAgentsPath(workspaceId), {
     method: "POST",
     body: JSON.stringify({ agent_id: agentId }),
-  }).then(normalizeBinding);
+  }).then((raw) => normalizeBinding(raw, workspaceId));
 }
 
 export function patchWorkspaceAgent(
   workspaceId: string,
-  id: string,
+  agentId: string,
   patch: WorkspaceAgentPatch,
 ): Promise<WorkspaceAgentBinding> {
-  return apiFetch<unknown>(wsAgentsPath(workspaceId, id), {
+  return apiFetch<unknown>(wsAgentsPath(workspaceId, agentId), {
     method: "PATCH",
     body: JSON.stringify(patch),
-  }).then(normalizeBinding);
+  }).then((raw) => normalizeBinding(raw, workspaceId));
 }
 
-export async function detachWorkspaceAgent(workspaceId: string, id: string): Promise<void> {
-  await apiFetch(wsAgentsPath(workspaceId, id), { method: "DELETE" });
+export async function detachWorkspaceAgent(workspaceId: string, agentId: string): Promise<void> {
+  await apiFetch(wsAgentsPath(workspaceId, agentId), { method: "DELETE" });
 }
 
-/** Chat runtime response is passed through; request body is `{ message }`. */
 export function chatWorkspaceAgent(
   workspaceId: string,
-  id: string,
+  agentId: string,
   message: string,
-): Promise<unknown> {
-  return apiFetch(`${wsAgentsPath(workspaceId, id)}/chat`, {
+): Promise<AgentChatOut> {
+  return apiFetch(`${wsAgentsPath(workspaceId, agentId)}/chat`, {
     method: "POST",
     body: JSON.stringify({ message }),
   });

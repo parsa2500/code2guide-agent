@@ -141,7 +141,7 @@ export default function AgentFormModal({
         </div>
         <div className="flap">
           <label className="flap-label" htmlFor="agent-policy">
-            سیاست
+            سیاست / policy
           </label>
           <textarea
             id="agent-policy"

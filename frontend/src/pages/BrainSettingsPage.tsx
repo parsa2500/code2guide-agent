@@ -103,9 +103,8 @@ export default function BrainSettingsPage() {
               onChange={(e) => setSettings({ ...settings, qdrant_url: e.target.value })}
               dir="ltr"
               spellCheck={false}
-              placeholder="http://localhost:6333"
+              placeholder="http://localhost:6333 (اختیاری)"
               disabled={loading || saving}
-              required
             />
           </div>
 
