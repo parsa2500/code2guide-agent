@@ -4,12 +4,16 @@ import BackButton, { HubLink } from "../../components/BackButton";
 import type { WorkspaceDetailOut } from "../../api/workspaces";
 import { getWorkspace } from "../../api/workspaces";
 import ChatTab from "./tabs/ChatTab";
+import AgentsTab from "./tabs/AgentsTab";
+import AgentSettingsTab from "./tabs/AgentSettingsTab";
 import UpdateTab from "./tabs/UpdateTab";
 import SettingsTab from "./tabs/SettingsTab";
 import LogsTab from "./tabs/LogsTab";
 
 const TABS = [
   { id: "chat", label: "چت" },
+  { id: "agents", label: "ایجنت‌ها" },
+  { id: "agent-settings", label: "تنظیمات ایجنت" },
   { id: "update", label: "Update" },
   { id: "settings", label: "تنظیمات" },
   { id: "logs", label: "لاگ‌ها" },
@@ -121,6 +125,10 @@ export default function WorkspaceDetail() {
 
             <div className="tab-panel" role="tabpanel">
               {tab === "chat" ? <ChatTab workspaceId={workspace.id} /> : null}
+              {tab === "agents" ? <AgentsTab workspaceId={workspace.id} /> : null}
+              {tab === "agent-settings" ? (
+                <AgentSettingsTab workspaceId={workspace.id} />
+              ) : null}
               {tab === "update" ? (
                 <UpdateTab workspace={workspace} onWorkspaceChange={setWorkspace} />
               ) : null}
