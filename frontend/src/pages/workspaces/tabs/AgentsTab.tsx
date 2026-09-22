@@ -109,8 +109,15 @@ export default function AgentsTab({ workspaceId }: Props) {
     setDraft("");
   }, [active?.agent_id]);
 
+  // Never leave Connect stuck in «در حال اتصال…» when nothing can be attached.
+  useEffect(() => {
+    if (availableToAttach.length === 0 && attaching) {
+      setAttaching(false);
+    }
+  }, [availableToAttach.length, attaching]);
+
   async function attach() {
-    if (!pickerId || attaching) return;
+    if (!pickerId || attaching || availableToAttach.length === 0) return;
     setAttaching(true);
     setError(null);
     try {
@@ -198,18 +205,31 @@ export default function AgentsTab({ workspaceId }: Props) {
             ))
           )}
         </select>
-        <button
-          type="button"
-          className="btn btn-primary"
-          onClick={() => void attach()}
-          disabled={attaching || !pickerId || availableToAttach.length === 0}
-        >
-          {attaching ? "در حال اتصال…" : "اتصال"}
-        </button>
+        {availableToAttach.length === 0 ? (
+          <span className="empty-hint" style={{ margin: 0 }} aria-live="polite">
+            همهٔ ایجنت‌های منتشرشده وصل‌اند
+          </span>
+        ) : (
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => void attach()}
+            disabled={attaching || !pickerId}
+          >
+            {attaching ? "در حال اتصال…" : "اتصال"}
+          </button>
+        )}
         <button type="button" className="btn" onClick={() => void refresh()} disabled={loading}>
           تازه‌سازی
         </button>
       </div>
+
+      {availableToAttach.length === 0 ? (
+        <p className="empty-hint" style={{ marginTop: 0 }}>
+          برای اتصال ایجنت تازه، یکی را از تنظیمات ایجنت جدا کنید یا ایجنت جدیدی در{" "}
+          <a href="/agents">/agents</a> منتشر کنید.
+        </p>
+      ) : null}
 
       {error ? (
         <p className="empty-hint" data-tone="error" role="alert">
