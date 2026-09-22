@@ -12,6 +12,7 @@ from src.db.base import Base
 if TYPE_CHECKING:
     from src.db.models.activity_log import ActivityLog
     from src.db.models.chatbot import Chatbot
+    from src.db.models.workspace_agent import WorkspaceAgent
     from src.db.models.settings import WorkspaceSettings
     from src.db.models.update_job import UpdateJob
 
@@ -42,6 +43,10 @@ class Workspace(Base):
         cascade="all, delete-orphan",
     )
     chatbots: Mapped[List["Chatbot"]] = relationship(
+        back_populates="workspace",
+        cascade="all, delete-orphan",
+    )
+    agents: Mapped[List["WorkspaceAgent"]] = relationship(
         back_populates="workspace",
         cascade="all, delete-orphan",
     )

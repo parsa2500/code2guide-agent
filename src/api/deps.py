@@ -7,7 +7,9 @@ from collections.abc import Iterator
 from fastapi import Depends
 from sqlalchemy.orm import Session
 
+from src.app.services.agent_service import AgentService
 from src.app.services.chat_service import ChatService
+from src.app.services.workspace_agent_service import WorkspaceAgentService
 from src.app.services.log_service import LogService
 from src.app.services.settings_service import SettingsService
 from src.app.services.update_service import UpdateService
@@ -33,3 +35,11 @@ def get_log_service(db: Session = Depends(get_db)) -> LogService:
 
 def get_chat_service(db: Session = Depends(get_db)) -> ChatService:
     return ChatService(db)
+
+
+def get_agent_service(db: Session = Depends(get_db)) -> AgentService:
+    return AgentService(db)
+
+
+def get_workspace_agent_service(db: Session = Depends(get_db)) -> WorkspaceAgentService:
+    return WorkspaceAgentService(db)
