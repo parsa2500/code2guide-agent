@@ -48,3 +48,10 @@ class ChatRole(str, Enum):
 class ChatbotRole(str, Enum):
     END_USER = "end_user"
     TECHNICAL = "technical"
+
+
+class AgentKind(str, Enum):
+    JARVIS = "jarvis"
+    END_USER = "end_user"
+    TECHNICAL = "technical"
+    CUSTOM = "custom"

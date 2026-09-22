@@ -913,6 +913,27 @@ a.btn {
   box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
 }
 
+.modal-panel-wide {
+  width: min(720px, 100%);
+}
+
+.modal-panel-wide .modal-body {
+  max-height: min(78vh, 760px);
+}
+
+.field-hint {
+  margin: 0.35rem 0 0;
+  font-size: 0.8rem;
+  color: var(--cream-dim);
+  line-height: 1.5;
+}
+
+.field-hint[data-tone="error"],
+.empty-hint[data-tone="error"] {
+  color: var(--danger);
+  border-color: rgba(255, 107, 90, 0.45);
+}
+
 .modal-head,
 .modal-footer {
   display: flex;

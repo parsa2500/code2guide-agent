@@ -23,6 +23,7 @@ from src.app.repositories.chatbot_repo import ChatbotRepository
 from src.app.repositories.settings_repo import SettingsRepository
 from src.app.repositories.update_job_repo import UpdateJobRepository
 from src.app.repositories.workspace_repo import WorkspaceRepository
+from src.app.services.agent_seed import bind_default_agents
 from src.app.services.log_service import LogService
 from src.app.services.settings_service import SettingsService
 from src.app.timeutil import utc_now_iso
@@ -75,6 +76,8 @@ class WorkspaceService:
                 ),
             ]
         )
+        # Slice-1: keep chatbot rows for AskConsole AND bind workspace_agents
+        bind_default_agents(self.db, ws.id)
         self.logs.append(
             ws.id,
             level=LogLevel.INFO,
