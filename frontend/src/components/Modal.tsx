@@ -7,9 +7,10 @@ type Props = {
   onClose: () => void;
   children: ReactNode;
   footer?: ReactNode;
+  wide?: boolean;
 };
 
-export default function Modal({ title, open, onClose, children, footer }: Props) {
+export default function Modal({ title, open, onClose, children, footer, wide = false }: Props) {
   useEffect(() => {
     if (!open) return;
     function onKey(e: KeyboardEvent) {
@@ -24,7 +25,7 @@ export default function Modal({ title, open, onClose, children, footer }: Props)
   return (
     <div className="modal-backdrop" role="presentation" onClick={onClose}>
       <div
-        className="modal-panel"
+        className={`modal-panel${wide ? " modal-panel-wide" : ""}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby="modal-title"

@@ -1,6 +1,8 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import HomeHub from "./pages/HomeHub";
 import AskConsole from "./pages/AskConsole";
+import AgentsPage from "./pages/AgentsPage";
+import BrainSettingsPage from "./pages/BrainSettingsPage";
 import PlaceholderPage from "./pages/PlaceholderPage";
 import WorkspaceList from "./pages/workspaces/WorkspaceList";
 import WorkspaceTrash from "./pages/workspaces/WorkspaceTrash";
@@ -14,16 +16,8 @@ export default function App() {
       <Route path="/workspaces" element={<WorkspaceList />} />
       <Route path="/workspaces/trash" element={<WorkspaceTrash />} />
       <Route path="/workspaces/:id" element={<WorkspaceDetail />} />
-      <Route
-        path="/agents"
-        element={
-          <PlaceholderPage
-            title="ایجنت‌ها"
-            code="AGT"
-            blurb="مدیریت ایجنت‌ها بعداً اینجا می‌آید."
-          />
-        }
-      />
+      <Route path="/agents" element={<AgentsPage />} />
+      <Route path="/brain-settings" element={<BrainSettingsPage />} />
       <Route
         path="/api-mcp"
         element={
