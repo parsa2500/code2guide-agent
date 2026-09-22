@@ -11,7 +11,13 @@ const tiles = [
     to: "/agents",
     code: "AGT",
     title: "ایجنت‌ها",
-    desc: "پیکربندی ایجنت‌ها — به‌زودی",
+    desc: "رجیستری سراسری ایجنت‌ها",
+  },
+  {
+    to: "/brain-settings",
+    code: "BRN",
+    title: "تنظیمات مغز",
+    desc: "Qdrant و مدل embedding",
   },
   {
     to: "/api-mcp",
