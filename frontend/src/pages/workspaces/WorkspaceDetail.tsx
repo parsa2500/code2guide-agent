@@ -11,7 +11,7 @@ import SettingsTab from "./tabs/SettingsTab";
 import LogsTab from "./tabs/LogsTab";
 
 const TABS = [
-  { id: "chat", label: "چت" },
+  { id: "chat", label: "چت راهنما" },
   { id: "agents", label: "ایجنت‌ها" },
   { id: "agent-settings", label: "تنظیمات ایجنت" },
   { id: "update", label: "Update" },

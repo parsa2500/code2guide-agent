@@ -8,6 +8,8 @@ from src.db.models.chatbot import Chatbot
 from src.db.models.chat_message import ChatMessage
 from src.db.models.agent_definition import AgentDefinition
 from src.db.models.workspace_agent import WorkspaceAgent
+from src.db.models.guide_session import GuideSession
+from src.db.models.guide_message import GuideMessage
 
 __all__ = [
     "Workspace",
@@ -18,4 +20,6 @@ __all__ = [
     "ChatMessage",
     "AgentDefinition",
     "WorkspaceAgent",
+    "GuideSession",
+    "GuideMessage",
 ]

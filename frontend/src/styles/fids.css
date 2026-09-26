@@ -1122,6 +1122,84 @@ a.btn {
   border-color: rgba(61, 214, 198, 0.3);
 }
 
+.guide-session-toolbar {
+  padding: 0.65rem 0.75rem;
+  border-bottom: 1px solid var(--navy-line);
+}
+
+.guide-session-toolbar .btn {
+  width: 100%;
+}
+
+.guide-session-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: stretch;
+}
+
+.guide-session-row .chat-bot-item {
+  border-bottom: 1px solid var(--navy-line);
+}
+
+.guide-session-del {
+  appearance: none;
+  border: 0;
+  border-bottom: 1px solid var(--navy-line);
+  background: transparent;
+  color: var(--cream-dim);
+  padding: 0 0.65rem;
+  cursor: pointer;
+}
+
+.guide-session-del:hover {
+  color: var(--amber);
+  background: rgba(245, 197, 24, 0.08);
+}
+
+.guide-bubble-text {
+  white-space: pre-wrap;
+}
+
+.guide-steps {
+  margin-top: 0.55rem;
+  font-size: 0.85rem;
+}
+
+.guide-steps summary {
+  cursor: pointer;
+  color: var(--cream-dim);
+}
+
+.guide-steps-live {
+  margin-top: 0.55rem;
+}
+
+.guide-steps-label {
+  font-family: var(--font-board);
+  letter-spacing: 0.06em;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  color: var(--amber-dim);
+  margin-bottom: 0.35rem;
+}
+
+.guide-step-list {
+  margin: 0.35rem 0 0;
+  padding-inline-start: 1.1rem;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.guide-step-list .log-detail {
+  margin-top: 0.35rem;
+  border: 1px dashed var(--navy-line);
+}
+
+.guide-live {
+  opacity: 0.95;
+}
+
 .chat-compose {
   display: flex;
   gap: 0.5rem;

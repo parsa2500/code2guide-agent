@@ -5,6 +5,7 @@ from fastapi import APIRouter
 from . import (
     agents,
     brain_settings,
+    guide_chat,
     workspace_agents,
     workspace_chat,
     workspace_logs,
@@ -19,6 +20,7 @@ shell_router.include_router(workspace_settings.router)
 shell_router.include_router(workspace_updates.router)
 shell_router.include_router(workspace_logs.router)
 shell_router.include_router(workspace_chat.router)
+shell_router.include_router(guide_chat.router)
 shell_router.include_router(agents.router)
 shell_router.include_router(workspace_agents.router)
 shell_router.include_router(brain_settings.router)

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from src.app.services.agent_service import AgentService
 from src.app.services.chat_service import ChatService
+from src.app.services.guide_chat_service import GuideChatService
 from src.app.services.workspace_agent_service import WorkspaceAgentService
 from src.app.services.log_service import LogService
 from src.app.services.settings_service import SettingsService
@@ -35,6 +36,10 @@ def get_log_service(db: Session = Depends(get_db)) -> LogService:
 
 def get_chat_service(db: Session = Depends(get_db)) -> ChatService:
     return ChatService(db)
+
+
+def get_guide_chat_service(db: Session = Depends(get_db)) -> GuideChatService:
+    return GuideChatService(db)
 
 
 def get_agent_service(db: Session = Depends(get_db)) -> AgentService:
