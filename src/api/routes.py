@@ -215,6 +215,35 @@ def verify_auth_context(payload: VerifyAuthContextRequest):
         )
 
 
+class ChatTurnRequest(BaseModel):
+    """W3-02: Main-only chat proxy turn (browser must not call this with secrets)."""
+
+    text: str = Field(..., description="User message")
+    auth_context: Dict[str, Any] = Field(..., description="Signed session packet from Main")
+    browser_claims: Optional[Dict[str, Any]] = Field(default=None)
+    session_id: Optional[str] = Field(default=None)
+    request_id: Optional[str] = Field(default=None)
+    timeout_seconds: Optional[float] = Field(default=None, ge=1, le=60)
+
+
+@router.post(
+    "/chat/turns",
+    summary="W3-02: authenticated chat turn via router (server-side proxy target)",
+)
+def chat_turns(payload: ChatTurnRequest):
+    from src.app.services.chat_proxy import ChatProxyService
+
+    timeout = payload.timeout_seconds if payload.timeout_seconds is not None else 25.0
+    service = ChatProxyService(timeout_seconds=timeout)
+    return service.handle_turn(
+        text=payload.text,
+        auth_context=payload.auth_context,
+        browser_claims=payload.browser_claims,
+        request_id=payload.request_id,
+        session_id=payload.session_id,
+    )
+
+
 @router.post(
     "/ask-mykb",
     summary="W1-04 spike: Persian answer from my-kb only (local HybridIndexer unused)",
