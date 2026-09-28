@@ -69,6 +69,10 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/ask-routed `
   -d "{\"query\":\"مناقصه دو مرحله‌ای را مرحله‌به‌مرحله بگو\",\"role\":\"کارشناس\"}"
 ```
 
+### W3-01: `/api/v1/auth/verify-context`
+
+Verify HMAC-signed session claims from Contracts.Main. Browser `tenant_id` / `user_id` that disagree with the packet are rejected (`forged_tenant` / `forged_user`).
+
 ## Notes
 
 - Branch used for Dargah planning baseline: `feature/agents-brain-v1`

@@ -185,6 +185,36 @@ def ask_routed(payload: AskRoutedRequest):
     )
 
 
+class VerifyAuthContextRequest(BaseModel):
+    """W3-01: verify signed session context; reject forged browser tenant/user."""
+
+    auth_context: Dict[str, Any] = Field(..., description="Signed packet from Contracts.Main")
+    browser_claims: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Optional client-supplied ids to reconcile (must match session)",
+    )
+
+
+@router.post(
+    "/auth/verify-context",
+    summary="W3-01: verify HMAC auth context and reject forged tenant/user",
+)
+def verify_auth_context(payload: VerifyAuthContextRequest):
+    from src.app.services.auth_context import AuthContextError, verify_context
+
+    try:
+        claims = verify_context(
+            payload.auth_context,
+            browser_claims=payload.browser_claims,
+        )
+        return {"ok": True, "claims": claims}
+    except AuthContextError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"ok": False, "error_code": exc.code, "message": str(exc)},
+        )
+
+
 @router.post(
     "/ask-mykb",
     summary="W1-04 spike: Persian answer from my-kb only (local HybridIndexer unused)",
