@@ -61,7 +61,7 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/ask-process `
 
 ### W2-03: `/api/v1/ask-routed`
 
-Rule router: FAQ → my-kb guide; process → graph; personal/ambiguous → clarify; attack → refuse. Trace includes `reason_code`, `tools_used`, `model_calls_used` (max 2, no loop).
+Rule router: FAQ → my-kb guide; process → graph; personal/ambiguous → clarify; attack → refuse. Trace includes `reason_code`, `tools_used`, `model_calls_used` (max 2, no loop). Customer text is normalized by the Persian template (`کاری که انجام دهید` + UI steps + role/version + support trace).
 
 ```powershell
 curl -s -X POST http://127.0.0.1:8000/api/v1/ask-routed `

@@ -151,6 +151,7 @@ class AnswerRouterService:
                 route_kind=route_kind,
                 model_calls=model_calls,
                 request_id=rid,
+                role=role,
             )
 
         if route_kind == "personal":
@@ -174,6 +175,7 @@ class AnswerRouterService:
                 route_kind=route_kind,
                 model_calls=model_calls,
                 request_id=rid,
+                role=role,
             )
 
         if route_kind == "ambiguous":
@@ -197,6 +199,7 @@ class AnswerRouterService:
                 route_kind=route_kind,
                 model_calls=model_calls,
                 request_id=rid,
+                role=role,
             )
 
         if route_kind == "process":
@@ -210,6 +213,7 @@ class AnswerRouterService:
                 route_kind=route_kind,
                 model_calls=model_calls,
                 request_id=rid,
+                role=role,
             )
 
         # FAQ → approved guide via Hub (counts as at most one external answer path;
@@ -236,6 +240,7 @@ class AnswerRouterService:
                 route_kind=route_kind,
                 model_calls=model_calls,
                 request_id=rid,
+                role=role,
             )
 
         model_calls += 1  # one Hub/guide turn
@@ -256,6 +261,7 @@ class AnswerRouterService:
                 route_kind="process_fallback",
                 model_calls=model_calls,
                 request_id=rid,
+                role=role,
             )
         if out.get("status") in ("clarify", "escalate") and not out.get("citations"):
             reason = (
@@ -270,6 +276,7 @@ class AnswerRouterService:
                 route_kind=route_kind,
                 model_calls=model_calls,
                 request_id=rid,
+                role=role,
             )
         return self._wrap(
             out,
@@ -278,6 +285,7 @@ class AnswerRouterService:
             route_kind=route_kind,
             model_calls=model_calls,
             request_id=rid,
+            role=role,
         )
 
     def _wrap(
@@ -289,7 +297,10 @@ class AnswerRouterService:
         route_kind: str,
         model_calls: int,
         request_id: str,
+        role: Optional[str] = None,
     ) -> Dict[str, Any]:
+        from src.app.services.persian_answer_template import format_persian_answer
+
         out = dict(payload)
         trace = dict(out.get("trace") or {})
         # dedupe tools preserving order
@@ -299,6 +310,7 @@ class AnswerRouterService:
             if t not in seen:
                 seen.add(t)
                 ordered.append(t)
+        ordered.append("persian_template.format")
         trace.update(
             {
                 "request_id": request_id,
@@ -314,4 +326,5 @@ class AnswerRouterService:
         out["reason_code"] = reason_code
         if not out.get("trace_id"):
             out["trace_id"] = f"trace:w2-03:{request_id}"
+        out = format_persian_answer(out, role=role)
         return out
