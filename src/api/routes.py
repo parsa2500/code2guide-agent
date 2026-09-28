@@ -133,6 +133,32 @@ def ask_codebase(payload: AskRequest):
         )
 
 
+class AskProcessRequest(BaseModel):
+    """W2-02: process graph route — subgraph + related chunks only."""
+
+    query: str = Field(..., example="مناقصه دو مرحله‌ای را مرحله‌به‌مرحله بگو")
+    role: Optional[str] = Field(default=None, description="کارشناس | مدیر | پشتیبانی")
+    request_id: Optional[str] = Field(default=None)
+    max_chunks: int = Field(default=4, ge=1, le=8)
+
+
+@router.post(
+    "/ask-process",
+    summary="W2-02: Persian step guide from process subgraph (no full corpus to model)",
+)
+def ask_process(payload: AskProcessRequest):
+    """Match a process graph, attach capped related chunks, format step guide."""
+    from src.app.services.process_graph_route import ProcessGraphRouteService
+
+    service = ProcessGraphRouteService()
+    return service.answer(
+        payload.query,
+        role=payload.role,
+        request_id=payload.request_id,
+        max_chunks=payload.max_chunks,
+    )
+
+
 @router.post(
     "/ask-mykb",
     summary="W1-04 spike: Persian answer from my-kb only (local HybridIndexer unused)",

@@ -49,6 +49,16 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/ask-mykb `
   -d "{\"query\":\"مناقصه دو مرحله‌ای چیست؟\",\"workspace_id\":\"contracts-guides\",\"brain\":\"guide\"}"
 ```
 
+### W2-02: `/api/v1/ask-process`
+
+Process graph route: matches a versioned subgraph and attaches only related chunks (full corpus omitted from model context).
+
+```powershell
+curl -s -X POST http://127.0.0.1:8000/api/v1/ask-process `
+  -H "Content-Type: application/json" `
+  -d "{\"query\":\"مناقصه دو مرحله‌ای را مرحله‌به‌مرحله بگو\",\"role\":\"کارشناس\"}"
+```
+
 ## Notes
 
 - Branch used for Dargah planning baseline: `feature/agents-brain-v1`

@@ -1,0 +1,225 @@
+{
+  "dataset": "process-graphs-v0",
+  "product_version": "Contracts.Main@local-baseline-2026-09-27",
+  "owner": "parsa",
+  "updated_at": "2026-09-28",
+  "processes": [
+    {
+      "process_id": "proc:q01-two-stage-tender",
+      "title_fa": "مناقصه دو مرحله‌ای",
+      "aliases": ["مناقصه دو مرحله", "پاکت ب", "پاکت ج", "ارزیابی فنی", "two-stage", "two stage"],
+      "module": "Tender",
+      "page_route": "/tenders",
+      "role_scope": ["کارشناس", "مدیر", "پشتیبانی"],
+      "source_refs": ["contracts-main-process-guides/Q01-two-stage-tender.md", "contracts-main-process-guides/version-3.25.1-process-notes.md"],
+      "evidence_ids": ["ev:guide:q01", "ev:guide:version-notes"],
+      "related_chunk_docs": ["guide:q01", "guide:version-notes"],
+      "prerequisites_global": [
+        "نسخهٔ سامانه با قابلیت مناقصه دو مرحله‌ای (یادداشت ۳٫۲۵٫۱)",
+        "دسترسی به منوی وب‌سایت → فراخوان ها",
+        "مشخص بودن نوع ارزیابی کیفی معامله"
+      ],
+      "steps": [
+        {
+          "step_id": "s1",
+          "label_ui": "فراخوان ها",
+          "instruction_fa": "از منوی وب‌سایت وارد فهرست «فراخوان ها» شوید.",
+          "prerequisite": "ورود با نقش دارای دسترسی فهرست فراخوان",
+          "condition": null,
+          "role_hint": ["کارشناس", "مدیر"],
+          "expected_result": "فهرست فراخوان‌ها با ستون‌های شماره درخواست، عنوان، نوع و نوع ارزیابی دیده می‌شود.",
+          "uncertainty": null
+        },
+        {
+          "step_id": "s2",
+          "label_ui": "انتخاب گردش کار",
+          "instruction_fa": "در انتخاب گردش کار، برای مناقصه بدون ارزیابی کیفی یا با ارزیابی کیفی ساده، مسیر دو مرحله‌ای با ارزیابی فنی را انتخاب کنید.",
+          "prerequisite": "نوع ارزیابی کیفی معامله مشخص باشد (none یا simple طبق ثابت‌های سامانه)",
+          "condition": "نسخه ≥ یادداشت ۳٫۲۵٫۱؛ ویژگی «مناقصه دو مرحله‌ای بدون ارزیابی کیفی» فعال باشد",
+          "role_hint": ["کارشناس", "مدیر"],
+          "expected_result": "مسیر دو مرحله‌ای فعال می‌شود و بخش ارزیابی کیفی در فرآیند نمایش داده نمی‌شود (طبق یادداشت نسخه).",
+          "uncertainty": null
+        },
+        {
+          "step_id": "s3",
+          "label_ui": "زمان‌بندی ارزیابی فنی",
+          "instruction_fa": "زمان‌بندی ارزیابی فنی را طبق تنظیمات گردش کار انتخاب کنید.",
+          "prerequisite": "گردش کار دو مرحله‌ای انتخاب شده باشد",
+          "condition": null,
+          "role_hint": ["کارشناس"],
+          "expected_result": "زمان ارزیابی فنی در فرآیند قابل انتخاب/مشاهده است.",
+          "uncertainty": "جزئیات همه فیلدهای زمان‌بندی هنوز در راهنمای تأییدشده کامل نیست."
+        },
+        {
+          "step_id": "s4",
+          "label_ui": "پاکت ب / ارزیابی فنی",
+          "instruction_fa": "مرحلهٔ ارزیابی فنی/کیفی مرتبط با پاکت ب را طبق وضعیت معامله انجام دهید؛ قبل از گشایش پاکت مالی پیش بروید.",
+          "prerequisite": "ارزیابی فنی برنامه‌ریزی شده باشد",
+          "condition": "پاکت ب در وضعیت قابل اقدام باشد",
+          "role_hint": ["کارشناس", "مدیر"],
+          "expected_result": "نتیجهٔ ارزیابی فنی ثبت شده و مسیر به پاکت مالی باز می‌شود.",
+          "uncertainty": "نام دقیق دکمه‌های همه نقش‌ها در Cypress/یادداشت ناقص است؛ در ابهام نقش بپرسید."
+        },
+        {
+          "step_id": "s5",
+          "label_ui": "پاکت ج (پیشنهاد قیمت)",
+          "instruction_fa": "پس از عبور از ارزیابی فنی، پاکت ج (پیشنهاد قیمت) را طبق برچسب UI باز کنید/ثبت کنید.",
+          "prerequisite": "شرط ورود از مرحلهٔ پاکت ب برقرار باشد",
+          "condition": "پاکت ج در UI با برچسب «پاکت ج (پیشنهاد قیمت)» دیده می‌شود",
+          "role_hint": ["کارشناس", "مدیر"],
+          "expected_result": "پیشنهاد قیمت ثبت یا گشوده می‌شود.",
+          "uncertainty": null
+        }
+      ]
+    },
+    {
+      "process_id": "proc:q02-qualitative-evaluation",
+      "title_fa": "ارزیابی کیفی و تعیین صلاحیت",
+      "aliases": ["ارزیابی کیفی", "تعیین صلاحیت", "نمره قبولی", "qualification"],
+      "module": "EvaluationQualitative",
+      "page_route": "/EvaluationQualitative/Edit",
+      "role_scope": ["کارشناس", "مدیر", "پشتیبانی"],
+      "source_refs": ["contracts-main-process-guides/Q02-qualitative-evaluation.md"],
+      "evidence_ids": ["ev:guide:q02"],
+      "related_chunk_docs": ["guide:q02"],
+      "prerequisites_global": [
+        "معامله در بستر Contracts.Main باشد (نه فقط ماژول Contractors)",
+        "دسترسی به صفحه ارزیابی کیفی"
+      ],
+      "steps": [
+        {
+          "step_id": "s1",
+          "label_ui": "ارزیابی کیفی",
+          "instruction_fa": "از مسیر ارزیابی کیفی معامله وارد فرم ویرایش ارزیابی شوید.",
+          "prerequisite": "معامله و شرکت‌کننده مرتبط ثبت شده باشد",
+          "condition": null,
+          "role_hint": ["کارشناس"],
+          "expected_result": "فرم ارزیابی کیفی باز است.",
+          "uncertainty": "برچسب منوی دقیق همه نصب‌ها ممکن است فرق کند؛ در ابهام صفحه را تأیید کنید."
+        },
+        {
+          "step_id": "s2",
+          "label_ui": "ثبت نتیجه صلاحیت",
+          "instruction_fa": "نتیجهٔ تعیین صلاحیت/امتیاز را طبق فیلدهای فرم ثبت و ذخیره کنید؛ مرز Contractors را با ثبت در بستر معامله قاطی نکنید.",
+          "prerequisite": "فرم ارزیابی باز باشد",
+          "condition": "نقش مجاز به ثبت نتیجه باشد",
+          "role_hint": ["کارشناس", "مدیر"],
+          "expected_result": "نتیجه ارزیابی ذخیره شده و وضعیت صلاحیت به‌روز است.",
+          "uncertainty": null
+        }
+      ]
+    },
+    {
+      "process_id": "proc:q03-transaction-types",
+      "title_fa": "انواع معاملات (مناقصه، مزایده، استعلام)",
+      "aliases": ["انواع معاملات", "مزایده", "استعلام بها", "نوع معامله", "transaction types"],
+      "module": "Tender",
+      "page_route": "/tenders",
+      "role_scope": ["کارشناس", "مدیر", "پشتیبانی"],
+      "source_refs": ["contracts-main-process-guides/Q03-transaction-types.md"],
+      "evidence_ids": ["ev:guide:q03"],
+      "related_chunk_docs": ["guide:q03"],
+      "prerequisites_global": ["دسترسی به فهرست فراخوان/معاملات"],
+      "steps": [
+        {
+          "step_id": "s1",
+          "label_ui": "فراخوان ها / فهرست معاملات",
+          "instruction_fa": "وارد فهرست معاملات شوید و ستون «نوع» را برای تشخیص مناقصه، مزایده یا استعلام ببینید.",
+          "prerequisite": "دسترسی فهرست",
+          "condition": null,
+          "role_hint": ["کارشناس", "مدیر"],
+          "expected_result": "نوع معامله در فهرست قابل مشاهده است.",
+          "uncertainty": null
+        },
+        {
+          "step_id": "s2",
+          "label_ui": "انتخاب نوع فرآیند",
+          "instruction_fa": "هنگام تعریف معامله، نوع فرآیند معاملاتی را انتخاب کنید؛ گردش پیش‌فرض همان نوع را دنبال می‌کند.",
+          "prerequisite": "شروع ثبت معامله جدید یا ویرایش مجاز",
+          "condition": "تغییر نوع پس از شروع ممکن است محدود باشد — بدون شاهد قطعی حدس نزنید",
+          "role_hint": ["کارشناس"],
+          "expected_result": "نوع ثبت شده و مسیر بعدی با آن هم‌خوان است.",
+          "uncertainty": "اجازهٔ تغییر نوع بعد از شروع در همه نسخه‌ها تأیید نشده است."
+        }
+      ]
+    },
+    {
+      "process_id": "proc:q04-award-to-contract",
+      "title_fa": "از تعیین برنده تا ثبت قرارداد",
+      "aliases": ["انعقاد قرارداد", "تعیین برنده", "پیش‌نویس قرارداد", "Awarding", "برنده"],
+      "module": "Contract",
+      "page_route": "/Contract/Edit",
+      "role_scope": ["کارشناس", "مدیر", "پشتیبانی"],
+      "source_refs": ["contracts-main-process-guides/Q04-award-to-contract.md"],
+      "evidence_ids": ["ev:guide:q04"],
+      "related_chunk_docs": ["guide:q04"],
+      "prerequisites_global": ["فرآیند معاملاتی به تعیین برنده رسیده باشد", "نقش و نسخه مشخص باشد"],
+      "steps": [
+        {
+          "step_id": "s1",
+          "label_ui": "تعیین برنده",
+          "instruction_fa": "پس از پایان فرآیند معاملاتی و پاکت مالی، برنده را در بستر معامله نهایی کنید.",
+          "prerequisite": "پاکت ج/پیشنهاد قیمت طی شده باشد",
+          "condition": null,
+          "role_hint": ["کارشناس", "مدیر"],
+          "expected_result": "برنده مشخص شده است.",
+          "uncertainty": null
+        },
+        {
+          "step_id": "s2",
+          "label_ui": "ثبت / پیش‌نویس قرارداد",
+          "instruction_fa": "ادامه را در ماژول قرارداد برای ثبت یا پیش‌نویس انجام دهید؛ نام دقیق دکمه را بدون شاهد نسخه‌دار حدس نزنید.",
+          "prerequisite": "برنده تعیین شده باشد",
+          "condition": "نقش مجاز به انعقاد",
+          "role_hint": ["کارشناس", "مدیر"],
+          "expected_result": "پیش‌نویس یا ثبت قرارداد آغاز می‌شود و اقلام قابل انتقال‌اند.",
+          "uncertainty": "مسیر کامل UI Awarding→پیش‌نویس هنوز راهنمای مرحله‌ای تأییدشدهٔ کامل ندارد؛ در ابهام به پشتیبانی ارجاع دهید."
+        }
+      ]
+    },
+    {
+      "process_id": "proc:q05-suggested-sources",
+      "title_fa": "منابع پیشنهادی مناقصه محدود / استعلام",
+      "aliases": ["منابع پیشنهادی", "ShortList", "رسته", "رتبه", "وندور", "تأمین‌کننده"],
+      "module": "Tender",
+      "page_route": "/tenders",
+      "role_scope": ["کارشناس", "مدیر", "پشتیبانی"],
+      "source_refs": ["contracts-main-process-guides/Q05-suggested-sources.md"],
+      "evidence_ids": ["ev:guide:q05"],
+      "related_chunk_docs": ["guide:q05"],
+      "prerequisites_global": ["معامله از نوع محدود یا استعلام باشد"],
+      "steps": [
+        {
+          "step_id": "s1",
+          "label_ui": "فهرست منابع پیشنهادی",
+          "instruction_fa": "در معاملهٔ محدود/استعلام بخش منابع پیشنهادی یا ShortList را باز کنید.",
+          "prerequisite": "معامله محدود/استعلام ایجاد شده باشد",
+          "condition": null,
+          "role_hint": ["کارشناس"],
+          "expected_result": "فهرست منابع پیشنهادی قابل ویرایش است.",
+          "uncertainty": null
+        },
+        {
+          "step_id": "s2",
+          "label_ui": "تطبیق رسته/رتبه",
+          "instruction_fa": "قبل از افزودن، رسته و رتبه تأمین‌کننده را با نیاز معامله تطبیق دهید.",
+          "prerequisite": "کاندید منبع مشخص باشد",
+          "condition": "خارج از رسته/رتبه مجاز نباشد",
+          "role_hint": ["کارشناس"],
+          "expected_result": "فقط منابع منطبق افزوده می‌شوند یا هشدار عدم تطابق دیده می‌شود.",
+          "uncertainty": "پیام خطای دقیق UI برای خارج از رسته در همه نسخه‌ها ثبت نشده است."
+        },
+        {
+          "step_id": "s3",
+          "label_ui": "افزودن منبع",
+          "instruction_fa": "منبع منطبق را به فهرست پیشنهادی اضافه و ذخیره کنید.",
+          "prerequisite": "تطبیق رسته/رتبه OK",
+          "condition": "نقش مجاز به ویرایش ShortList",
+          "role_hint": ["کارشناس", "مدیر"],
+          "expected_result": "منبع در فهرست پیشنهادی معامله دیده می‌شود.",
+          "uncertainty": null
+        }
+      ]
+    }
+  ]
+}
