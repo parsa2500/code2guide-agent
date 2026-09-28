@@ -159,6 +159,32 @@ def ask_process(payload: AskProcessRequest):
     )
 
 
+class AskRoutedRequest(BaseModel):
+    """W2-03: rule router — FAQ / process / clarify / refuse; max 2 model calls."""
+
+    query: str = Field(..., example="مناقصه دو مرحله‌ای را مرحله‌به‌مرحله بگو")
+    role: Optional[str] = Field(default=None)
+    request_id: Optional[str] = Field(default=None)
+    workspace_id: str = Field(default="contracts-guides")
+    brain: str = Field(default="guide")
+
+
+@router.post(
+    "/ask-routed",
+    summary="W2-03: rule-based router with reason_code and tools_used (no tool loop)",
+)
+def ask_routed(payload: AskRoutedRequest):
+    from src.app.services.answer_router import AnswerRouterService
+
+    return AnswerRouterService().route(
+        payload.query,
+        role=payload.role,
+        request_id=payload.request_id,
+        workspace_id=payload.workspace_id,
+        brain=payload.brain,
+    )
+
+
 @router.post(
     "/ask-mykb",
     summary="W1-04 spike: Persian answer from my-kb only (local HybridIndexer unused)",

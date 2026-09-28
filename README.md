@@ -59,6 +59,16 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/ask-process `
   -d "{\"query\":\"مناقصه دو مرحله‌ای را مرحله‌به‌مرحله بگو\",\"role\":\"کارشناس\"}"
 ```
 
+### W2-03: `/api/v1/ask-routed`
+
+Rule router: FAQ → my-kb guide; process → graph; personal/ambiguous → clarify; attack → refuse. Trace includes `reason_code`, `tools_used`, `model_calls_used` (max 2, no loop).
+
+```powershell
+curl -s -X POST http://127.0.0.1:8000/api/v1/ask-routed `
+  -H "Content-Type: application/json" `
+  -d "{\"query\":\"مناقصه دو مرحله‌ای را مرحله‌به‌مرحله بگو\",\"role\":\"کارشناس\"}"
+```
+
 ## Notes
 
 - Branch used for Dargah planning baseline: `feature/agents-brain-v1`
