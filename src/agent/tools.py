@@ -16,6 +16,7 @@ from src.search.hybrid_indexer import (
 )
 from src.parsers.ast_visitor import JSXASTVisitor, UIField, DiscoveredForm, UIButton, ComponentInspection
 from src.parsers.razor_ng_visitor import RazorNgFormVisitor
+from src.parsers.mvc_ui_adapter import MvcRazorAngularAdapter
 from src.parsers.route_extractor import RouteExtractor, RouteTree, RouteNode
 from src.parsers.alias_resolver import PathAliasResolver
 from src.parsers.i18n_parser import I18nParser
@@ -58,6 +59,7 @@ class Code2GuideToolbox:
         self.lexical_engine = RipgrepLexicalEngine(self.workspace_path, normalizer=self.normalizer)
         self.ast_visitor = JSXASTVisitor(normalizer=self.normalizer)
         self.razor_visitor = RazorNgFormVisitor(normalizer=self.normalizer)
+        self.mvc_ui_adapter = MvcRazorAngularAdapter(razor=self.razor_visitor)
         self.ui_text_extractor = UiTextExtractor(normalizer=self.normalizer)
         self.route_extractor = RouteExtractor(normalizer=self.normalizer)
         self.alias_resolver = PathAliasResolver(self.workspace_path)
@@ -151,8 +153,43 @@ class Code2GuideToolbox:
             prepared = self.i18n_parser.replace_i18n_calls(snippet)
             validation_rules = ValidationParser.extract_all(prepared)
             lower_path = file_path.lower()
+            adapter_payload = {
+                "permissions": [],
+                "field_helpers": [],
+                "api_calls": [],
+            }
             if lower_path.endswith((".cshtml", ".html")):
-                inspection = self.razor_visitor.parse_source(prepared, file_path=file_path)
+                # Prefer MVC/Angular adapter: forms + Permission/FieldHelper/fetch
+                controller_code = ""
+                controller_rel = ""
+                ctrl_guess = self._guess_mvc_controller_path(full_path)
+                if ctrl_guess and ctrl_guess.exists():
+                    try:
+                        controller_code = ctrl_guess.read_text(
+                            encoding="utf-8", errors="replace"
+                        )
+                        try:
+                            controller_rel = str(
+                                ctrl_guess.relative_to(
+                                    Path(self.workspace_path).resolve()
+                                )
+                            ).replace("\\", "/")
+                        except ValueError:
+                            controller_rel = str(ctrl_guess)
+                    except Exception:
+                        controller_code = ""
+                adapted = self.mvc_ui_adapter.parse(
+                    prepared,
+                    file_path=file_path,
+                    controller_code=controller_code,
+                    controller_path=controller_rel,
+                )
+                inspection = adapted.inspection
+                adapter_payload = {
+                    "permissions": [dump_model(p) for p in adapted.permissions],
+                    "field_helpers": [dump_model(p) for p in adapted.field_helpers],
+                    "api_calls": [dump_model(p) for p in adapted.api_calls],
+                }
             else:
                 inspection = self.ast_visitor.parse_source(prepared, file_path=file_path)
 
@@ -180,6 +217,9 @@ class Code2GuideToolbox:
                 "ui_texts": ui_texts,
                 "validation_rules": rules_data,
                 "validation_notes": notes,
+                "permissions": adapter_payload["permissions"],
+                "field_helpers": adapter_payload["field_helpers"],
+                "api_calls": adapter_payload["api_calls"],
                 "total_lines": len(lines),
             }
         except Exception as e:
@@ -190,7 +230,25 @@ class Code2GuideToolbox:
                 "ui_texts": [],
                 "validation_rules": [],
                 "validation_notes": [],
+                "permissions": [],
+                "field_helpers": [],
+                "api_calls": [],
             }
+
+    @staticmethod
+    def _guess_mvc_controller_path(view_path: Path) -> Optional[Path]:
+        """Map .../Views/{Name}/Edit.cshtml -> .../Controllers/{Name}Controller.cs."""
+        parts = list(view_path.parts)
+        try:
+            views_idx = next(i for i, p in enumerate(parts) if p.lower() == "views")
+        except StopIteration:
+            return None
+        if views_idx + 1 >= len(parts):
+            return None
+        controller_name = parts[views_idx + 1]
+        controllers_dir = Path(*parts[:views_idx]) / "Controllers"
+        candidate = controllers_dir / f"{controller_name}Controller.cs"
+        return candidate if candidate.exists() else None
 
     @staticmethod
     def _merge_validation_into_fields(

@@ -28,7 +28,8 @@ class FrontendApiTracer:
     """Regex-based extraction of API calls from TS/JS / AngularJS sources."""
 
     SKIP = DOTNET_SKIP_DIRS | {"__tests__", "coverage", "Scripts", "lib", "fonts", "packages"}
-    EXTS = (".ts", ".tsx", ".js", ".jsx")
+    # .cshtml: Razor views often embed fetch()/Angular $http for MVC portals
+    EXTS = (".ts", ".tsx", ".js", ".jsx", ".cshtml", ".html")
     VENDOR_HINTS = (".min.js", "jquery", "angular.min", "dx.", "bootstrap", "moment")
 
     def scan_workspace(self, workspace_path: str) -> List[FrontendApiCall]:
