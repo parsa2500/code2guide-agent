@@ -86,6 +86,24 @@ def _toolbox_for(workspace_path: Optional[str]) -> Code2GuideToolbox:
     return Code2GuideToolbox(workspace_path=target)
 
 
+class AskMyKbRequest(BaseModel):
+    """W1-04 spike: question answered only from Code-KB / my-kb Hub (no local index)."""
+
+    query: str = Field(..., example="مناقصه دو مرحله‌ای چیست؟", description="Persian user question")
+    workspace_id: str = Field(default="contracts-guides", description="Hub workspace id")
+    brain: str = Field(default="guide", description="Hub brain name")
+    revision_id: Optional[str] = Field(default=None, description="Optional pinned Hub revisionId")
+    product_version: str = Field(
+        default="Contracts.Main@local-baseline-2026-09-27",
+        description="Product version label for evidence.product_version",
+    )
+    page_route: str = Field(default="/ChatBot", description="UI page route for evidence scope")
+    role_scope: Optional[List[str]] = Field(
+        default=None, description="Role labels for evidence.role_scope"
+    )
+    request_id: Optional[str] = Field(default=None, description="Caller correlation id")
+
+
 @router.post("/ask", response_model=AskResponse, summary="Generate Persian UX Guide for codebase operation")
 def ask_codebase(payload: AskRequest):
     """Analyzes codebase AST, routes, and forms to generate a step-by-step Persian user guide."""
@@ -113,6 +131,27 @@ def ask_codebase(payload: AskRequest):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error executing Code2Guide agent: {str(e)}"
         )
+
+
+@router.post(
+    "/ask-mykb",
+    summary="W1-04 spike: Persian answer from my-kb only (local HybridIndexer unused)",
+)
+def ask_mykb(payload: AskMyKbRequest):
+    """Thin integration path: Hub query only. Does not call index_workspace or HybridIndexer."""
+    from src.app.services.mykb_guide_spike import MyKbGuideSpikeService
+
+    service = MyKbGuideSpikeService()
+    return service.answer(
+        payload.query,
+        workspace_id=payload.workspace_id,
+        brain=payload.brain,
+        product_version=payload.product_version,
+        page_route=payload.page_route,
+        role_scope=payload.role_scope,
+        revision_id=payload.revision_id,
+        request_id=payload.request_id,
+    )
 
 
 @router.post(

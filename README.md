@@ -38,6 +38,17 @@ npm run dev --prefix frontend   # http://127.0.0.1:5173
 
 Or from repo root: `npm run up` / `npm run down` (see `frontend/README.md`).
 
+### W1-04 spike: `/api/v1/ask-mykb`
+
+Answers from Code-KB / my-kb Hub only (`CODE_KB_BASE_URL` + `CODE_KB_TOKEN`). Does **not** call local `HybridIndexer` / `index_workspace` on this path.
+
+```powershell
+# set CODE_KB_TOKEN to the same value as my-kb DEV_AUTH_TOKEN (never commit)
+curl -s -X POST http://127.0.0.1:8000/api/v1/ask-mykb `
+  -H "Content-Type: application/json" `
+  -d "{\"query\":\"مناقصه دو مرحله‌ای چیست؟\",\"workspace_id\":\"contracts-guides\",\"brain\":\"guide\"}"
+```
+
 ## Notes
 
 - Branch used for Dargah planning baseline: `feature/agents-brain-v1`

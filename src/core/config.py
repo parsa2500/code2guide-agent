@@ -83,6 +83,16 @@ class Settings(BaseSettings):
         description="Default chat model for LangGraph agent"
     )
 
+    # Code-KB / my-kb Hub (W1-04 /ask-mykb — HTTP only, no local index)
+    code_kb_base_url: str = Field(
+        default="http://127.0.0.1:5051",
+        description="Base URL for Code-KB Hub API",
+    )
+    code_kb_token: Optional[str] = Field(
+        default=None,
+        description="Bearer token for Hub (same as my-kb DEV_AUTH_TOKEN); never commit",
+    )
+
     if _has_pydantic_settings:
         model_config = SettingsConfigDict(
             env_file=".env",
