@@ -18,6 +18,7 @@ import httpx
 
 from src.integrations.code_kb_client import CodeKbClient
 from src.app.services.guide_lab_settings import GuideSettings, FIXED_GUARD
+from src.app.services.guide_lab_sessions import GuideSessionStore, context_for_prompt
 
 HELP_FILES = {"SuggestedSuppliers.md", "evaluationCriteria.md", "documentation.md",
               "NotificationTemplates.md", "Claims.md", "TemplateIntroduction.md",
@@ -80,15 +81,16 @@ class GeminiGuideWriter:
 
 
 class ContractsGuideLab:
-    def __init__(self, client: CodeKbClient, workspace: str, revision: str, trace_dir: Path, writer=None, settings_store=None, provider_key=None, managed_knowledge=False):
+    def __init__(self, client: CodeKbClient, workspace: str, revision: str, trace_dir: Path, writer=None, settings_store=None, provider_key=None, managed_knowledge=False, session_store: GuideSessionStore | None = None):
         if not workspace or not revision:
             raise ValueError("Lab requires a pinned workspace and revision")
         self.client, self.workspace, self.revision = client, workspace, revision
         self.trace_dir, self.writer = trace_dir, writer
         self.settings_store, self.provider_key = settings_store, provider_key
         self.managed_knowledge, self.pipeline = managed_knowledge, None
+        self.session_store = session_store
 
-    def answer(self, question: str, run_id=None) -> dict[str, Any]:
+    def answer(self, question: str, run_id=None, session_id: str | None = None, page_context: Any = None) -> dict[str, Any]:
         started = time.perf_counter()
         revision = self.revision
         saved_settings = self.settings_store.get() if self.settings_store else {"revision": "defaults", "settings": GuideSettings().model_dump()}
@@ -96,18 +98,26 @@ class ContractsGuideLab:
         writer = self.writer
         if self.settings_store:
             writer = GeminiGuideWriter(self.provider_key, settings["model"], settings) if settings["provider"] == "gemini" and self.provider_key else None
+        session = self.session_store.get_or_create(session_id, page_context) if self.session_store else None
+        active_session_id = session["id"] if session else None
+        safe_page_context = session.get("page_context", {}) if session else {}
+        if session:
+            self.session_store.append_user(active_session_id, question, safe_page_context)
+            session = self.session_store.get(active_session_id) or session
         trace_id = run_id or uuid.uuid4().hex
         out: dict[str, Any] = {"trace_id": trace_id, "status": "partial", "answer": "",
             "steps": [], "citations": [], "code_notes": [], "clarification": "",
             "revision": revision, "workspace": self.workspace,
             "review_status": "pending-human", "role": None, "tenant": None, "app_version": None,
             "model": writer.model if writer else "none", "model_called": False,
-            "settings_revision": saved_settings["revision"]}
+            "settings_revision": saved_settings["revision"], "session_id": active_session_id,
+            "page_context": safe_page_context}
         trace: dict[str, Any] = {"question": question, "workspace": self.workspace, "revision": revision,
             "prompt_evidence": [], "code_evidence_local_only": [], "model_prompt": None,
             "started_at": datetime.now(timezone.utc).isoformat(), "settings_revision": saved_settings["revision"],
             "settings_snapshot": settings, "system_prompt": FIXED_GUARD + "\n\n" + settings["system_prompt"],
-            "events": [], "_started": started}
+            "events": [], "_started": started, "session_id": active_session_id,
+            "page_context": safe_page_context}
         if self.pipeline:
             self.pipeline.begin(trace_id,question,revision,saved_settings["revision"])
         def event(stage, **details):
@@ -136,8 +146,11 @@ class ContractsGuideLab:
             return self._finish(out, trace)
         try:
             event("retrieval_started",question=question,revision=revision,workspace=self.workspace)
+            retrieval_text = question
+            if safe_page_context:
+                retrieval_text += "\nزمینهٔ صفحهٔ فعلی (فقط برای انتخاب راهنما): " + context_for_prompt(safe_page_context)
             hub = self.client._request_json("POST", f"/api/v2/workspaces/{self.workspace}/query", {
-                "brain": "guide", "text": question, "revisionId": revision,
+                "brain": "guide", "text": retrieval_text, "revisionId": revision,
                 "budget": {"maxSearchHits": settings["max_search_hits"], "maxSeeds": settings["max_seeds"], "maxEvidenceItems": settings["max_evidence_items"], "maxEvidenceTokens": settings["max_evidence_tokens"]}})
             packet = hub.get("evidencePacket") or {}
             actual = (packet.get("meta") or {}).get("revision")
@@ -188,7 +201,13 @@ class ContractsGuideLab:
             if writer is None:
                 out.update(answer="شواهد مرتبط پیدا شد. تولید پاسخ با مدل در این اجرا فعال نیست؛ منابع را بررسی کنید.")
                 return self._finish(out, trace)
-            prompt = json.dumps({"question": question, "scope": settings["scope_prompt"], "evidence": docs}, ensure_ascii=False)
+            history = [
+                {"role": item.get("role"), "text": item.get("text")}
+                for item in (session or {}).get("messages", [])[-8:]
+            ]
+            prompt = json.dumps({"question": question, "conversation": history,
+                                 "page_context": safe_page_context, "scope": settings["scope_prompt"],
+                                 "evidence": docs}, ensure_ascii=False)
             trace["prompt_evidence"], trace["model_prompt"] = docs, prompt
             trace["prompt_sha256"] = hashlib.sha256(prompt.encode()).hexdigest()
             out["model_called"] = True
@@ -240,6 +259,11 @@ class ContractsGuideLab:
         trace.setdefault("events", []).append({"stage": "finished", "elapsed_ms": duration, "status": out["status"]})
         self.trace_dir.mkdir(parents=True, exist_ok=True)
         trace["response"] = out
+        if self.session_store and out.get("session_id"):
+            try:
+                self.session_store.append_assistant(out["session_id"], out)
+            except (KeyError, ValueError):
+                trace["session_store_error"] = "session_write_failed"
         (self.trace_dir / f"{out['trace_id']}.json").write_text(json.dumps(trace, ensure_ascii=False, indent=2), encoding="utf-8")
         if self.pipeline:
             self.pipeline.complete(out["trace_id"],out,duration)

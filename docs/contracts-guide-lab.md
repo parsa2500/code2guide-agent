@@ -9,6 +9,10 @@ The console now manages documents and code-knowledge nodes, edges and interpreta
 Verification: 22 service/API tests and 13 actual owner draft-store checks passed. A synthetic browser transport verified document create/update/publish, graph-node creation and the evidence-only pipeline. The browser fixture used no company source, database or provider; it did not verify actual PostgreSQL/Worker publication. See the delivery `phase1/P1-console-crud-pipeline-result.fa.md` and `GUIDE-CONSOLE.fa.md` for instructions and limits.
 
 Standalone Persian RTL demonstration. Knowledge comes only from the Code-KB Brain API.
+
+The chat page sends a message with Enter; Shift+Enter inserts a newline. Each browser keeps the active local session id and the page groups user and assistant messages under that session. The session list and messages are stored under `.code2guide/guide-console/sessions/` on the local lab host and are bounded to recent messages and sessions.
+
+Page context is sent with each turn through an allowlist: `page_route`, `page_title`, `entity_type`, `entity_id`, `tab`, `form_id`, `record_id`, and bounded `data`. The lab rejects or removes tenant, user, role, token, password, cookie and secret fields before persistence or provider prompt construction. An embedding host may set `window.contractsGuidePageContext` before loading `/chat`; operators can also edit the visible context panel during local evaluation. Page context is advisory and never replaces signed identity, tenant or role claims.
 This entrypoint does not import the legacy graph/Qdrant index or production chat routes.
 
 ## Start

@@ -8,6 +8,7 @@ from src.api.contracts_guide_lab import create_app
 from src.app.services.contracts_guide_lab import ContractsGuideLab
 from src.app.services.guide_lab_settings import GuideSettings, GuideSettingsStore, FIXED_GUARD
 from src.app.services.guide_lab_console import GuideLabConsole
+from src.app.services.guide_lab_sessions import GuideSessionStore
 
 
 class Brain:
@@ -27,7 +28,8 @@ def setup(tmp_path):
     project.mkdir()
     store = GuideSettingsStore(tmp_path / 'state', provider='none')
     service = ContractsGuideLab(Brain(), 'lab', 'rev:one', tmp_path/'traces/contracts-guide-lab-1',
-                                settings_store=store, provider_key='fake-private-key')
+                                settings_store=store, provider_key='fake-private-key',
+                                session_store=GuideSessionStore(tmp_path / 'state' / 'sessions'))
     return service, GuideLabConsole(service, project, tmp_path/'state')
 
 
@@ -78,6 +80,29 @@ def test_console_mutations_require_header_and_revision(tmp_path):
         assert 'fake-private-key' not in client.get('/api/console/overview').text
         assert client.post('/api/console/jobs',json={'kind':'arbitrary-shell'},headers={'X-Guide-Console':'1'}).status_code == 422
         assert client.put('/api/console/settings',json=body,headers={'X-Guide-Console':'1','Origin':'https://evil.example'}).status_code == 403
+
+
+def test_chat_keeps_session_and_page_context(tmp_path):
+    service, console = setup(tmp_path)
+    with TestClient(create_app(service, console)) as client:
+        created = client.post('/api/sessions', json={'page_context': {
+            'page_route': '/tenders/42', 'entity_type': 'tender',
+            'tenant_id': 'must-not-be-stored', 'data': {'step': 'evaluation', 'token': 'secret'},
+        }})
+        assert created.status_code == 200
+        session_id = created.json()['id']
+        response = client.post('/api/chat', json={
+            'question': 'چطور منابع پیشنهادی را اضافه کنم؟',
+            'session_id': session_id,
+            'page_context': {'page_route': '/tenders/42', 'data': {'step': 'evaluation'}},
+        })
+        assert response.status_code == 200
+        assert response.json()['session_id'] == session_id
+        loaded = client.get('/api/sessions/' + session_id).json()
+        assert [message['role'] for message in loaded['messages']] == ['user', 'assistant']
+        assert loaded['page_context']['data'] == {'step': 'evaluation'}
+        assert 'tenant_id' not in loaded['page_context']
+        assert 'token' not in json.dumps(loaded, ensure_ascii=False)
 
 
 def test_trace_paths_and_local_review_dont_promote_evidence(tmp_path):

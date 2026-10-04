@@ -2,6 +2,7 @@
 import os
 import re
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
@@ -12,10 +13,17 @@ from src.app.services.contracts_guide_lab import ContractsGuideLab, GeminiGuideW
 from src.integrations.code_kb_client import CodeKbClient, CodeKbError
 from src.app.services.guide_lab_settings import GuideSettings, GuideSettingsStore
 from src.app.services.guide_lab_console import GuideLabConsole
+from src.app.services.guide_lab_sessions import GuideSessionStore, sanitize_page_context
 
 
 class Turn(BaseModel):
     question: str = Field(min_length=3, max_length=1200)
+    session_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{32}$")
+    page_context: dict[str, Any] = Field(default_factory=dict)
+
+
+class SessionCreateRequest(BaseModel):
+    page_context: dict[str, Any] = Field(default_factory=dict)
 
 
 class SettingsUpdate(BaseModel):
@@ -63,7 +71,7 @@ def create_app(service: ContractsGuideLab, console: GuideLabConsole | None = Non
 
     @app.get("/chat")
     def chat_page():
-        return FileResponse(Path(__file__).parent / "static" / "contracts-guide-lab.html")
+        return FileResponse(Path(__file__).parent / "static" / "contracts-guide-chat.html")
 
     @app.get('/console-editor.js')
     def console_editor():
@@ -79,7 +87,11 @@ def create_app(service: ContractsGuideLab, console: GuideLabConsole | None = Non
 
     @app.post("/api/chat")
     def chat(turn: Turn):
-        return service.answer(turn.question.strip())
+        return service.answer(
+            turn.question.strip(),
+            session_id=turn.session_id,
+            page_context=sanitize_page_context(turn.page_context),
+        )
 
     @app.get("/api/evidence/{trace_id}/{citation_id}")
     def evidence(trace_id: str, citation_id: str):
@@ -96,6 +108,28 @@ def create_app(service: ContractsGuideLab, console: GuideLabConsole | None = Non
         @app.get("/api/console/settings")
         def settings():
             return service.settings_store.get()
+
+        @app.get("/api/sessions")
+        def sessions():
+            if not service.session_store:
+                return {"items": []}
+            return {"items": service.session_store.list()}
+
+        @app.post("/api/sessions")
+        def create_session(request: SessionCreateRequest | None = None):
+            context = sanitize_page_context(request.page_context if request else {})
+            if not service.session_store:
+                raise HTTPException(503, "sessions_unavailable")
+            return service.session_store.create(context)
+
+        @app.get("/api/sessions/{session_id}")
+        def get_session(session_id: str):
+            if not service.session_store:
+                raise HTTPException(503, "sessions_unavailable")
+            session = service.session_store.get(session_id)
+            if session is None:
+                raise HTTPException(404, "session_not_found")
+            return session
 
         @app.put("/api/console/settings")
         def save_settings(update: SettingsUpdate):
@@ -206,10 +240,12 @@ def app_factory():
     project_dir = Path(os.environ["GUIDE_LAB_PROJECT_DIR"]) if os.environ.get("GUIDE_LAB_PROJECT_DIR") else None
     state_dir = Path(".code2guide/guide-console").resolve()
     store = GuideSettingsStore(state_dir, provider=provider, model=os.environ.get("GUIDE_LAB_MODEL", "gemini-3.1-flash-lite")) if project_dir else None
+    sessions = GuideSessionStore(state_dir / "sessions") if project_dir else None
     service = ContractsGuideLab(
         CodeKbClient(base_url=os.environ["CODE_KB_BASE_URL"], token=os.environ["CODE_KB_TOKEN"]),
         os.environ["GUIDE_LAB_WORKSPACE"], os.environ["GUIDE_LAB_REVISION"],
         Path(os.environ.get("GUIDE_LAB_TRACE_DIR", ".code2guide/guide-lab-traces")),
         GeminiGuideWriter(key, os.environ.get("GUIDE_LAB_MODEL", "gemini-3.1-flash-lite")) if provider == "gemini" else None,
-        settings_store=store, provider_key=key, managed_knowledge=os.environ.get('GUIDE_LAB_MANAGED_KNOWLEDGE')=='1')
+        settings_store=store, provider_key=key, managed_knowledge=os.environ.get('GUIDE_LAB_MANAGED_KNOWLEDGE')=='1',
+        session_store=sessions)
     return create_app(service, GuideLabConsole(service, project_dir, state_dir) if project_dir else None)
