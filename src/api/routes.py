@@ -232,9 +232,13 @@ class ChatTurnRequest(BaseModel):
 )
 def chat_turns(payload: ChatTurnRequest):
     from src.app.services.chat_proxy import ChatProxyService
+    from src.app.services.turn_telemetry import get_turn_telemetry_store
 
     timeout = payload.timeout_seconds if payload.timeout_seconds is not None else 25.0
-    service = ChatProxyService(timeout_seconds=timeout)
+    service = ChatProxyService(
+        timeout_seconds=timeout,
+        store=get_turn_telemetry_store(),
+    )
     return service.handle_turn(
         text=payload.text,
         auth_context=payload.auth_context,
@@ -242,6 +246,51 @@ def chat_turns(payload: ChatTurnRequest):
         request_id=payload.request_id,
         session_id=payload.session_id,
     )
+
+
+class ChatFeedbackRequest(BaseModel):
+    """W3-03: allowed feedback only. Free-text explanation is ignored."""
+
+    trace_id: str
+    rating: str = Field(..., description="up or down")
+    reason_code: Optional[str] = None
+    explanation: Optional[str] = Field(
+        default=None,
+        description="Accepted and discarded. Contract text is not stored.",
+    )
+
+
+@router.post(
+    "/chat/feedback",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="W3-03: record allowed feedback for a turn; no contract text",
+)
+def chat_feedback(payload: ChatFeedbackRequest):
+    from src.app.services.turn_telemetry import get_turn_telemetry_store
+
+    store = get_turn_telemetry_store()
+    try:
+        feedback = store.record_feedback(
+            payload.trace_id,
+            payload.rating,
+            payload.reason_code,
+        )
+    except KeyError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"ok": False, "error_code": "trace_not_found"},
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"ok": False, "error_code": str(exc)},
+        )
+    return {
+        "ok": True,
+        "feedback_id": feedback["feedback_id"],
+        "trace_id": payload.trace_id,
+        "explanation_stored": False,
+    }
 
 
 @router.post(

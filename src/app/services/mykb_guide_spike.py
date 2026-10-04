@@ -8,6 +8,36 @@ from typing import Any, Dict, List, Optional
 from src.integrations.code_kb_client import CodeKbClient, CodeKbError
 
 
+def _usage_from_hub(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Copy numeric usage only. Do not keep prompt or answer text."""
+    raw = result.get("usage") or result.get("tokenUsage") or {}
+    if not isinstance(raw, dict):
+        raw = {}
+
+    def _n(*keys: str) -> int:
+        for key in keys:
+            value = raw.get(key)
+            if isinstance(value, (int, float)):
+                return int(value)
+        return 0
+
+    usage: Dict[str, Any] = {
+        "input": _n("prompt_tokens", "input_tokens", "promptTokenCount"),
+        "output": _n("completion_tokens", "output_tokens", "candidatesTokenCount"),
+        "cache": _n("cache_tokens", "cached_tokens", "cachedContentTokenCount"),
+    }
+    model = raw.get("model") or result.get("model")
+    if isinstance(model, str) and model.strip():
+        usage["model"] = model.strip()[:120]
+    latency = result.get("latencyMs") or result.get("latency_ms")
+    if isinstance(latency, dict):
+        if isinstance(latency.get("retrieval"), (int, float)):
+            usage["retrieval_latency_ms"] = int(latency["retrieval"])
+        if isinstance(latency.get("model"), (int, float)):
+            usage["model_latency_ms"] = int(latency["model"])
+    return usage
+
+
 class MyKbGuideSpikeService:
     """Map Hub query packets into the blueprint answer/evidence shape.
 
@@ -235,5 +265,6 @@ class MyKbGuideSpikeService:
                 "local_index_used": False,
                 "answer_count": len(answer_texts),
                 "citation_count": len(citations),
+                "usage": _usage_from_hub(result),
             },
         }

@@ -36,6 +36,10 @@ class TestAnswerRouter(unittest.TestCase):
         self.assertEqual(out["trace"]["route_kind"], "process")
         self.assertEqual(out["trace"]["model_calls_used"], 0)
         self.assertFalse(out["trace"]["loop"])
+        self.assertEqual(out["trace"]["latency_ms"]["model"], 0)
+        self.assertGreaterEqual(out["trace"]["latency_ms"]["retrieval"], 0)
+        self.assertEqual(out["trace"]["model_version"], "none")
+        self.assertEqual(out["trace"]["tokens"]["cache"], 0)
         self.assertIn("router.classify", out["trace"]["tools_used"])
         self.assertTrue(out.get("subgraph") or out.get("steps"))
 
@@ -53,13 +57,28 @@ class TestAnswerRouter(unittest.TestCase):
             "trace_id": "t",
             "knowledge_revision": "rev",
             "evidence": [],
-            "trace": {"tools_used": ["code_kb.query"], "local_index_used": False},
+            "trace": {
+                "tools_used": ["code_kb.query"],
+                "local_index_used": False,
+                "usage": {
+                    "input": 10,
+                    "output": 4,
+                    "cache": 2,
+                    "model": "gemini-3.5-flash-lite",
+                    "retrieval_latency_ms": 30,
+                    "model_latency_ms": 80,
+                },
+            },
         }
         out = self.router.route("چطور از دستیار داخل سامانه سؤال بپرسم؟", request_id="r-faq")
         self.guide.answer.assert_called_once()
         self.assertEqual(out["reason_code"], REASON_FAQ_GUIDE)
         self.assertEqual(out["trace"]["model_calls_used"], 1)
         self.assertLessEqual(out["trace"]["model_calls_used"], out["trace"]["model_calls_max"])
+        self.assertEqual(out["trace"]["latency_source"], "usage")
+        self.assertEqual(out["trace"]["latency_ms"], {"retrieval": 30, "model": 80})
+        self.assertEqual(out["trace"]["model_version"], "gemini-3.5-flash-lite")
+        self.assertNotIn("usage", out["trace"])
 
     def test_personal_clarifies(self):
         out = self.router.route("وضعیت قرارداد من چیست؟", request_id="r-pers")

@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 
 
 HEADER = "کاری که انجام دهید"
+PROMPT_VERSION = "persian-template-v0"
 
 
 def format_persian_answer(

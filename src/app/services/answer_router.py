@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import time
 import uuid
 from typing import Any, Dict, List, Optional
+
+from src.app.services.persian_answer_template import PROMPT_VERSION
 
 from src.app.services.mykb_guide_spike import MyKbGuideSpikeService
 from src.app.services.process_graph_route import ProcessGraphRouteService
@@ -204,7 +207,9 @@ class AnswerRouterService:
 
         if route_kind == "process":
             tools.append("process_graph.answer")
+            t0 = time.perf_counter()
             out = self.process_service.answer(query, role=role, request_id=rid)
+            retrieval_ms = int((time.perf_counter() - t0) * 1000)
             # process path is deterministic — 0 model calls
             return self._wrap(
                 out,
@@ -214,6 +219,9 @@ class AnswerRouterService:
                 model_calls=model_calls,
                 request_id=rid,
                 role=role,
+                retrieval_ms=retrieval_ms,
+                model_ms=0,
+                latency_source="local_retrieval",
             )
 
         # FAQ → approved guide via Hub (counts as at most one external answer path;
@@ -244,16 +252,20 @@ class AnswerRouterService:
             )
 
         model_calls += 1  # one Hub/guide turn
+        t0 = time.perf_counter()
         out = self.guide_service.answer(
             query,
             workspace_id=workspace_id,
             brain=brain,
             request_id=rid,
         )
+        hub_ms = int((time.perf_counter() - t0) * 1000)
         if out.get("status") == "escalate" and self.process_service.match_process(query):
             # fallback without spending a second model call: local process graph
             tools.append("process_graph.answer_fallback")
+            t1 = time.perf_counter()
             pout = self.process_service.answer(query, role=role, request_id=rid)
+            retrieval_ms = int((time.perf_counter() - t1) * 1000)
             return self._wrap(
                 pout,
                 reason_code=REASON_PROCESS_GRAPH,
@@ -262,6 +274,9 @@ class AnswerRouterService:
                 model_calls=model_calls,
                 request_id=rid,
                 role=role,
+                retrieval_ms=retrieval_ms,
+                model_ms=hub_ms,
+                latency_source="hub_unsplit",
             )
         if out.get("status") in ("clarify", "escalate") and not out.get("citations"):
             reason = (
@@ -277,6 +292,9 @@ class AnswerRouterService:
                 model_calls=model_calls,
                 request_id=rid,
                 role=role,
+                retrieval_ms=hub_ms,
+                model_ms=0,
+                latency_source="hub_unsplit",
             )
         return self._wrap(
             out,
@@ -286,6 +304,9 @@ class AnswerRouterService:
             model_calls=model_calls,
             request_id=rid,
             role=role,
+            retrieval_ms=hub_ms,
+            model_ms=0,
+            latency_source="hub_unsplit",
         )
 
     def _wrap(
@@ -298,11 +319,25 @@ class AnswerRouterService:
         model_calls: int,
         request_id: str,
         role: Optional[str] = None,
+        retrieval_ms: int = 0,
+        model_ms: int = 0,
+        latency_source: str = "none",
     ) -> Dict[str, Any]:
         from src.app.services.persian_answer_template import format_persian_answer
 
         out = dict(payload)
         trace = dict(out.get("trace") or {})
+        usage = dict(trace.pop("usage", None) or {})
+        if "retrieval_latency_ms" in usage or "model_latency_ms" in usage:
+            retrieval_ms = int(usage.get("retrieval_latency_ms") or 0)
+            model_ms = int(usage.get("model_latency_ms") or 0)
+            latency_source = "usage"
+        tokens = {
+            "input": int(usage.get("input") or 0),
+            "output": int(usage.get("output") or 0),
+            "cache": int(usage.get("cache") or 0),
+        }
+        model_version = str(usage.get("model") or ("none" if model_calls == 0 else "hub-unspecified"))
         # dedupe tools preserving order
         seen = set()
         ordered = []
@@ -320,6 +355,11 @@ class AnswerRouterService:
                 "model_calls_used": model_calls,
                 "model_calls_max": self.max_model_calls,
                 "loop": False,
+                "latency_ms": {"retrieval": int(retrieval_ms), "model": int(model_ms)},
+                "latency_source": latency_source,
+                "tokens": tokens,
+                "model_version": model_version,
+                "prompt_version": PROMPT_VERSION,
             }
         )
         out["trace"] = trace
